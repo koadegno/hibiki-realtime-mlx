@@ -47,6 +47,8 @@ jobs:
         run: |
           node --check hibiki_mlx_realtime_api/static/quality-lab.js
           node --check hibiki_mlx_realtime_api/static/quality-input-processor.js
+          node --check hibiki_mlx_realtime_api/static/transport-replay-core.js
+          node --check hibiki_mlx_realtime_api/static/transport-replay.js
       - name: Browser deterministic transport tests
         working-directory: backend/hibiki_mlx_realtime_api
         run: node --test tests/test_transport_replay_core.js
