@@ -186,7 +186,7 @@
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: false,
           autoGainControl: true,
           channelCount: 1,
         },
