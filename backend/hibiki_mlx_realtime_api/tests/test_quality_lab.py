@@ -21,7 +21,7 @@ def test_pcm_quality_lab_assets_are_packaged() -> None:
     assert "Download source WAV" in html
     assert "PCM_INPUT_KIND = 3" in script
     assert "echoCancellation: true" in script
-    assert "noiseSuppression: true" in script
+    assert "noiseSuppression: false" in script
     assert "autoGainControl: true" in script
     assert "channelCount: 1" in script
     assert "inputAudioContext = new AudioContext({ sampleRate: SAMPLE_RATE })" in script
