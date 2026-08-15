@@ -53,6 +53,17 @@ class FakeManager:
             error=None,
         )
 
+    @property
+    def experiment_metadata(self) -> dict[str, object]:
+        return {
+            "sampling_profile": "greedy",
+            "sampling_seed": 123,
+            "text_temperature": 0.0,
+            "text_top_k": 250,
+            "audio_temperature": 0.8,
+            "audio_top_k": 250,
+        }
+
     def start_background(self) -> asyncio.Task[None]:
         self.started += 1
         return asyncio.create_task(asyncio.sleep(0))
@@ -102,7 +113,14 @@ async def test_health_ready_and_frontend_routes(tmp_path: Path) -> None:
         assert health.status == 200
         assert await health.json() == {"status": "ok"}
         assert ready.status == 503
-        assert (await ready.json())["phase"] == "loading_model"
+        ready_payload = await ready.json()
+        assert ready_payload["phase"] == "loading_model"
+        assert ready_payload["sampling_profile"] == "greedy"
+        assert ready_payload["sampling_seed"] == 123
+        assert ready_payload["text_temperature"] == 0.0
+        assert ready_payload["text_top_k"] == 250
+        assert ready_payload["audio_temperature"] == 0.8
+        assert ready_payload["audio_top_k"] == 250
         assert "HIBIKI FRONTEND" in await index.text()
 
     assert manager.started == 1
