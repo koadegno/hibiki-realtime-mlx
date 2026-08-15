@@ -62,12 +62,12 @@ def create_app(
         return web.json_response({"status": "ok"})
 
     async def ready(_: web.Request) -> web.Response:
-        return _readiness_response(manager.snapshot)
+        return _readiness_response(manager.snapshot, manager.experiment_metadata)
 
     async def chat(request: web.Request) -> web.StreamResponse:
         snapshot = manager.snapshot
         if not snapshot.ready:
-            return _readiness_response(snapshot)
+            return _readiness_response(snapshot, manager.experiment_metadata)
         return await _handle_chat(request, manager, session_lock, modules)
 
     async def index(_: web.Request) -> web.FileResponse:
@@ -99,7 +99,7 @@ async def _handle_chat(
         opus_reader = modules.sphn.OpusStreamReader(SAMPLE_RATE)
         opus_writer = modules.sphn.OpusStreamWriter(SAMPLE_RATE)
         await ws.send_bytes(b"\x00")
-        _LOGGER.info("accepted Hibiki MLX connection")
+        _LOGGER.info("accepted Hibiki MLX connection sampling=%s", manager.experiment_metadata)
         try:
             await asyncio.gather(
                 _receive_audio(ws, opus_reader, session, done),
@@ -211,13 +211,15 @@ async def _send_events(
         _LOGGER.warning("unknown realtime event: %r", event)
 
 
-def _readiness_response(snapshot: RuntimeSnapshot) -> web.Response:
-    return web.json_response(
-        {
-            "status": "ready" if snapshot.ready else "not_ready",
-            "phase": snapshot.phase.value,
-            "ready": snapshot.ready,
-            "error": snapshot.error,
-        },
-        status=200 if snapshot.ready else 503,
-    )
+def _readiness_response(
+    snapshot: RuntimeSnapshot,
+    experiment_metadata: dict[str, object],
+) -> web.Response:
+    payload: dict[str, object] = {
+        "status": "ready" if snapshot.ready else "not_ready",
+        "phase": snapshot.phase.value,
+        "ready": snapshot.ready,
+        "error": snapshot.error,
+    }
+    payload.update(experiment_metadata)
+    return web.json_response(payload, status=200 if snapshot.ready else 503)
