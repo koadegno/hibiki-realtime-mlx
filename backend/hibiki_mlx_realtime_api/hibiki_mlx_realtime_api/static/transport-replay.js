@@ -22,6 +22,8 @@
   const sourceHashElement = document.getElementById("sourceHash");
   const sourceSamplesElement = document.getElementById("sourceSamples");
   const sourceDurationElement = document.getElementById("sourceDuration");
+  const samplingProfileElement = document.getElementById("samplingProfile");
+  const samplingSeedElement = document.getElementById("samplingSeed");
   const runStatusElement = document.getElementById("runStatus");
   const serverUrlElement = document.getElementById("serverUrl");
   const inputFramesElement = document.getElementById("inputFrames");
@@ -77,6 +79,11 @@
     outputPacketsElement.textContent = "0";
     outputSamplesElement.textContent = "0";
     transcriptElement.textContent = "";
+  }
+
+  function displayRuntimeMetadata(metadata) {
+    samplingProfileElement.textContent = metadata ? metadata.sampling_profile : "—";
+    samplingSeedElement.textContent = metadata ? String(metadata.sampling_seed) : "—";
   }
 
   function createFailureChannel() {
@@ -234,6 +241,37 @@
     };
   }
 
+  async function fetchRuntimeMetadata() {
+    const response = await fetch("/ready", { cache: "no-store" });
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new Error(`Hibiki /ready did not return JSON: ${String(error)}`);
+    }
+
+    if (!response.ok || payload.ready !== true) {
+      throw new Error(`Hibiki runtime is not ready: ${payload.phase || response.status}`);
+    }
+    if (typeof payload.sampling_profile !== "string" || payload.sampling_profile.length === 0) {
+      throw new Error("Hibiki /ready is missing Stage 2 sampling_profile metadata");
+    }
+    if (!Number.isInteger(payload.sampling_seed)) {
+      throw new Error("Hibiki /ready is missing Stage 2 sampling_seed metadata");
+    }
+    for (const field of ["text_temperature", "audio_temperature"]) {
+      if (typeof payload[field] !== "number" || !Number.isFinite(payload[field])) {
+        throw new Error(`Hibiki /ready is missing Stage 2 ${field} metadata`);
+      }
+    }
+    for (const field of ["text_top_k", "audio_top_k"]) {
+      if (!Number.isInteger(payload[field]) || payload[field] <= 0) {
+        throw new Error(`Hibiki /ready is missing Stage 2 ${field} metadata`);
+      }
+    }
+    return payload;
+  }
+
   function openWebSocket(url, failure, consume) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
@@ -283,7 +321,7 @@
               close() {
                 intentionallyClosed = true;
                 if (ws.readyState === WebSocket.OPEN) {
-                  ws.close(1000, "Stage 1B replay complete");
+                  ws.close(1000, "Deterministic replay complete");
                 } else if (ws.readyState === WebSocket.CONNECTING) {
                   ws.close();
                 }
@@ -493,6 +531,7 @@
     setArtifactButtons(false);
     resetCounters();
     setError("");
+    displayRuntimeMetadata(null);
     setRunning(true);
 
     const failure = createFailureChannel();
@@ -502,8 +541,13 @@
     serverUrlElement.textContent = url;
     let session = null;
     let preencodedOpus = null;
+    let runtimeMetadata = null;
 
     try {
+      setRunStatus("Reading runtime sampling identity…");
+      runtimeMetadata = await Promise.race([fetchRuntimeMetadata(), failure.promise]);
+      displayRuntimeMetadata(runtimeMetadata);
+
       if (transport === "opus") {
         setRunStatus("Pre-encoding the exact WAV with the bundled official Opus worker…");
         preencodedOpus = await Promise.race([
@@ -516,7 +560,7 @@
       session = await openWebSocket(url, failure, (bytes) => capture.consume(bytes));
       setRunStatus(
         transport === "pcm"
-          ? "Replaying exact PCM16 at 80 ms cadence…"
+          ? `Stage 2 ${runtimeMetadata.sampling_profile}: replaying exact PCM16 at 80 ms cadence…`
           : `Replaying pre-encoded official Opus pages at ${OPUS_PAGE_INTERVAL_MS} ms cadence…`,
       );
 
@@ -534,8 +578,12 @@
       const transcript = capture.transcript();
       const translatedPcm = capture.translatedPcm();
       const translatedWav = core.writePcm16Wav(translatedPcm);
+      const label =
+        transport === "pcm"
+          ? `stage2-${runtimeMetadata.sampling_profile}-pcm`
+          : "stage1b-opus";
       const manifest = core.buildManifest({
-        label: `stage1b-${transport}`,
+        label,
         serverUrl: url,
         sourcePcmSha256: selectedSource.sourceHash,
         sourceSamples: selectedSource.source.samples,
@@ -549,6 +597,12 @@
       manifest.input_opus_pages = sendResult.inputPackets;
       manifest.output_packets = capture.outputPacketCount();
       manifest.settle_seconds = SETTLE_SECONDS;
+      manifest.sampling_profile = runtimeMetadata.sampling_profile;
+      manifest.sampling_seed = runtimeMetadata.sampling_seed;
+      manifest.text_temperature = runtimeMetadata.text_temperature;
+      manifest.text_top_k = runtimeMetadata.text_top_k;
+      manifest.audio_temperature = runtimeMetadata.audio_temperature;
+      manifest.audio_top_k = runtimeMetadata.audio_top_k;
       if (transport === "opus") {
         manifest.opus_preencoded_before_websocket = true;
         manifest.opus_page_interval_ms = OPUS_PAGE_INTERVAL_MS;
@@ -566,7 +620,8 @@
       outputSamplesElement.textContent = String(translatedPcm.length);
       setArtifactButtons(true);
       setRunStatus(
-        `Completed ${transport.toUpperCase()} run. Download all four artifacts before changing transport.`,
+        `Completed ${transport.toUpperCase()} run (${runtimeMetadata.sampling_profile}). ` +
+          "Download all four artifacts before changing server/profile.",
       );
     } catch (error) {
       setRunStatus("Run failed — no completed manifest/artifact set was accepted.");
@@ -595,7 +650,7 @@
 
   function requireCompletedResult() {
     if (!completedResult) {
-      throw new Error("No completed Stage 1B run is available for download");
+      throw new Error("No completed deterministic replay is available for download");
     }
     return completedResult;
   }
@@ -631,6 +686,7 @@
   });
 
   serverUrlElement.textContent = websocketUrl();
+  displayRuntimeMetadata(null);
   setArtifactButtons(false);
   setRunning(false);
 })();
