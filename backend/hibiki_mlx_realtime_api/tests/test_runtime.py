@@ -91,6 +91,42 @@ async def test_runtime_loads_model_and_codec_before_becoming_ready(tmp_path: Pat
     assert session_kwargs["queue_capacity"] == 16
     assert session_kwargs["max_steps"] == 1508
     assert session_kwargs["telemetry_interval_frames"] == 125
+    assert session_kwargs["sampling_profile"] == "mlx-current"
+    assert session_kwargs["sampling_seed"] == 299792458
+
+
+@pytest.mark.asyncio
+async def test_runtime_exposes_resolved_sampling_experiment_metadata(tmp_path: Path) -> None:
+    mimi_path = tmp_path / "mimi.safetensors"
+    mimi_path.write_bytes(b"x")
+    files = SimpleNamespace(mimi=mimi_path)
+    loaded = SimpleNamespace(
+        lm_config=SimpleNamespace(
+            audio_codebooks=32,
+            other_codebooks=16,
+            generated_codebooks=16,
+        )
+    )
+    calls: list[tuple[object, ...]] = []
+    codec_pair = FakeCodecPair(calls)
+    manager = RuntimeManager(
+        RuntimeConfig(codec="mlx", sampling_profile="greedy", sampling_seed=123),
+        resolve_files=lambda _: files,
+        load_model=lambda _: loaded,
+        codec_factory=lambda *args, **kwargs: codec_pair,
+        session_factory=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+
+    await manager.initialize()
+
+    assert manager.experiment_metadata == {
+        "sampling_profile": "greedy",
+        "sampling_seed": 123,
+        "text_temperature": 0.0,
+        "text_top_k": 250,
+        "audio_temperature": 0.8,
+        "audio_top_k": 250,
+    }
 
 
 @pytest.mark.asyncio
