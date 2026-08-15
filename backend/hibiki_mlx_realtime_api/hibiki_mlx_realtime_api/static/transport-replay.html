@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hibiki Stage 1B Transport Replay</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        background: #101413;
+        color: #e8eeeb;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px 64px;
+      }
+      main {
+        width: min(880px, 100%);
+        margin: 0 auto;
+      }
+      h1,
+      h2 {
+        color: #39f2ae;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      .hint {
+        color: #aab5b0;
+        line-height: 1.5;
+      }
+      .panel {
+        border: 1px solid #34413c;
+        padding: 18px;
+        margin: 18px 0;
+        background: #151b19;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 14px;
+      }
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+      }
+      input,
+      select {
+        padding: 8px;
+        color: inherit;
+        background: #0e1211;
+        border: 1px solid #485750;
+      }
+      button {
+        padding: 9px 12px;
+        color: #39f2ae;
+        background: transparent;
+        border: 1px dashed #39f2ae;
+        cursor: pointer;
+      }
+      button:disabled {
+        color: #6d7773;
+        border-color: #48504d;
+        cursor: not-allowed;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: minmax(150px, 220px) 1fr;
+        gap: 8px 14px;
+        margin: 0;
+      }
+      dt {
+        color: #9facA6;
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      #error {
+        color: #ff7d7d;
+        white-space: pre-wrap;
+      }
+      #transcript {
+        min-height: 120px;
+        white-space: pre-wrap;
+        line-height: 1.55;
+      }
+      code {
+        color: #d7fff0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hibiki Stage 1B — deterministic transport replay</h1>
+      <p class="hint">
+        Feed one exact 24 kHz mono PCM16 WAV through raw PCM or the bundled official Opus
+        encoder. Keep this tab active while a run is in progress. Each run creates a fresh
+        Hibiki websocket session.
+      </p>
+
+      <section class="panel">
+        <h2>Source</h2>
+        <div class="grid">
+          <label>
+            Canonical source WAV
+            <input id="sourceFile" type="file" accept="audio/wav,.wav" />
+          </label>
+          <label>
+            Transport
+            <select id="transport">
+              <option value="pcm">Raw PCM16LE — kind 0x03</option>
+              <option value="opus">Official bundled Opus — kind 0x01</option>
+            </select>
+          </label>
+          <label>
+            Silence tail (seconds)
+            <input id="tailSeconds" type="number" value="6" min="0" step="0.02" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="run" type="button" disabled>Run transport replay</button>
+          <button id="cancel" type="button" disabled>Cancel</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Experiment identity</h2>
+        <dl>
+          <dt>Source SHA-256</dt>
+          <dd id="sourceHash">—</dd>
+          <dt>Source samples</dt>
+          <dd id="sourceSamples">—</dd>
+          <dt>Source duration</dt>
+          <dd id="sourceDuration">—</dd>
+          <dt>Canonical first corpus</dt>
+          <dd><code>22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3</code></dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Run</h2>
+        <dl>
+          <dt>Status</dt>
+          <dd id="runStatus">Load a source WAV.</dd>
+          <dt>Server</dt>
+          <dd id="serverUrl">—</dd>
+          <dt>Input frames fed</dt>
+          <dd id="inputFrames">0</dd>
+          <dt>Input Opus pages sent</dt>
+          <dd id="inputPackets">0</dd>
+          <dt>Translated packets</dt>
+          <dd id="outputPackets">0</dd>
+          <dt>Translated samples</dt>
+          <dd id="outputSamples">0</dd>
+        </dl>
+        <p id="error"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Transcript</h2>
+        <div id="transcript"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Completed-run artifacts</h2>
+        <p class="hint">
+          Downloads are enabled only after the source plus deterministic tail completed without
+          an encoder, decoder, websocket, or pacing failure.
+        </p>
+        <div class="actions">
+          <button id="downloadSource" type="button" disabled>Download source.wav</button>
+          <button id="downloadTranscript" type="button" disabled>Download transcript.txt</button>
+          <button id="downloadTranslated" type="button" disabled>Download translated.wav</button>
+          <button id="downloadManifest" type="button" disabled>Download manifest.json</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="/transport-replay-core.js"></script>
+    <script src="/transport-replay.js"></script>
+  </body>
+</html>
