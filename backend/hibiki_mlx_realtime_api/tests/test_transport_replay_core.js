@@ -93,7 +93,7 @@ test("createPcmFrames pads the last source frame then appends exact silence", ()
   assert.ok(frames[3].every((value) => value === 0));
 });
 
-test("createOpusFrames uses exact 20 ms framing and int16/32768 conversion", () => {
+test("createOpusFrames uses 20 ms frames but pads source duration to the same 80 ms boundary as raw PCM", () => {
   const samples = new Array(481).fill(0);
   samples[0] = -32768;
   samples[1] = 32767;
@@ -101,7 +101,7 @@ test("createOpusFrames uses exact 20 ms framing and int16/32768 conversion", () 
 
   const frames = core.createOpusFrames(pcm16(samples), 0.04);
 
-  assert.equal(frames.length, 4);
+  assert.equal(frames.length, 6);
   assert.ok(frames.every((frame) => frame instanceof Float32Array));
   assert.ok(frames.every((frame) => frame.length === 480));
   assert.equal(frames[0][0], -1);
@@ -110,6 +110,8 @@ test("createOpusFrames uses exact 20 ms framing and int16/32768 conversion", () 
   assert.ok(frames[1].subarray(1).every((value) => value === 0));
   assert.ok(frames[2].every((value) => value === 0));
   assert.ok(frames[3].every((value) => value === 0));
+  assert.ok(frames[4].every((value) => value === 0));
+  assert.ok(frames[5].every((value) => value === 0));
 });
 
 test("official encoder configuration exactly matches the resolved 24 kHz frontend worker config", () => {
