@@ -94,6 +94,59 @@ async def test_runtime_loads_model_and_codec_before_becoming_ready(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_runtime_creates_fresh_rust_codec_pair_for_each_session(tmp_path: Path) -> None:
+    mimi_path = tmp_path / "mimi.safetensors"
+    mimi_path.write_bytes(b"x")
+    files = SimpleNamespace(mimi=mimi_path)
+    loaded = SimpleNamespace(
+        lm_config=SimpleNamespace(
+            audio_codebooks=32,
+            other_codebooks=16,
+            generated_codebooks=16,
+        )
+    )
+    calls: list[tuple[object, ...]] = []
+    codec_pairs: list[FakeCodecPair] = []
+
+    def codec_factory(
+        kind: str,
+        *,
+        mimi_path: Path,
+        num_codebooks: int,
+        checkpoint_codebooks: int,
+    ) -> FakeCodecPair:
+        assert kind == "rust"
+        assert num_codebooks == 16
+        assert checkpoint_codebooks == 32
+        pair = FakeCodecPair(calls)
+        codec_pairs.append(pair)
+        return pair
+
+    def session_factory(**kwargs: object) -> object:
+        return SimpleNamespace(**kwargs)
+
+    manager = RuntimeManager(
+        RuntimeConfig(codec="rust"),
+        resolve_files=lambda _: files,
+        load_model=lambda _: loaded,
+        codec_factory=codec_factory,
+        session_factory=session_factory,
+    )
+
+    await manager.initialize()
+    first = manager.create_session()
+    second = manager.create_session()
+
+    assert len(codec_pairs) == 3
+    assert codec_pairs[0].warmup_calls == 1
+    assert codec_pairs[1].warmup_calls == 0
+    assert codec_pairs[2].warmup_calls == 0
+    assert first.codecs is codec_pairs[1]
+    assert second.codecs is codec_pairs[2]
+    assert first.codecs is not second.codecs
+
+
+@pytest.mark.asyncio
 async def test_runtime_captures_initialization_failure() -> None:
     def fail(_: RuntimeConfig) -> object:
         raise RuntimeError("boom")
