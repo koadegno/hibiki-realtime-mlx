@@ -10,6 +10,9 @@
   const OPUS_INPUT_KIND = 1;
   const SETTLE_SECONDS = 1;
   const MAX_SCHEDULER_LAG_MS = 250;
+  const OPUS_PAGE_INTERVAL_MS =
+    core.OFFICIAL_ENCODER_CONFIG.encoderFrameSize *
+    core.OFFICIAL_ENCODER_CONFIG.maxFramesPerPage;
 
   const sourceFileElement = document.getElementById("sourceFile");
   const transportElement = document.getElementById("transport");
@@ -111,15 +114,19 @@
     }
   }
 
-  async function feedAtCadence(frames, intervalMs, failure, sendFrame) {
+  async function feedAtCadence(items, intervalMs, failure, sendItem, onProgress = null) {
     let deadline = performance.now();
-    for (let index = 0; index < frames.length; index += 1) {
+    for (let index = 0; index < items.length; index += 1) {
       if (index > 0) {
         deadline += intervalMs;
         await waitUntil(deadline, failure);
       }
-      await Promise.race([Promise.resolve(sendFrame(frames[index], index)), failure.promise]);
-      inputFramesElement.textContent = String(index + 1);
+      await Promise.race([Promise.resolve(sendItem(items[index], index)), failure.promise]);
+      if (onProgress) {
+        onProgress(index + 1);
+      } else {
+        inputFramesElement.textContent = String(index + 1);
+      }
     }
   }
 
@@ -134,6 +141,21 @@
       return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     }
     throw new Error("Expected binary worker/server payload");
+  }
+
+  function containsAscii(bytes, text) {
+    if (text.length === 0 || bytes.length < text.length) return false;
+    outer: for (let offset = 0; offset <= bytes.length - text.length; offset += 1) {
+      for (let index = 0; index < text.length; index += 1) {
+        if (bytes[offset + index] !== text.charCodeAt(index)) continue outer;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function isOpusHeaderPage(page) {
+    return containsAscii(page, "OpusHead") || containsAscii(page, "OpusTags");
   }
 
   function concatenateFloat32(parts) {
@@ -151,6 +173,7 @@
     const textParts = [];
     const audioParts = [];
     let outputPackets = 0;
+    let outputSamples = 0;
     const decoder = new Worker("/decoderWorker.min.js");
 
     decoder.onerror = (event) => {
@@ -163,9 +186,8 @@
         const frame = value instanceof Float32Array ? value : new Float32Array(value);
         if (frame.length === 0) return;
         audioParts.push(new Float32Array(frame));
-        outputSamplesElement.textContent = String(
-          audioParts.reduce((sum, part) => sum + part.length, 0),
-        );
+        outputSamples += frame.length;
+        outputSamplesElement.textContent = String(outputSamples);
       } catch (error) {
         failure.fail(error);
       }
@@ -291,14 +313,15 @@
     return { inputFrames: frames.length, inputPackets: 0 };
   }
 
-  async function sendOfficialOpus(ws, pcmBytes, tailSeconds, failure) {
+  async function preencodeOfficialOpus(pcmBytes, tailSeconds, failure) {
     const frames = core.createOpusFrames(pcmBytes, tailSeconds);
     const worker = new Worker("/encoderWorker.min.js");
+    const headerPages = [];
+    const audioPages = [];
     let readyResolve;
     let doneResolve;
     let ready = false;
     let done = false;
-    let inputPackets = 0;
     const readyPromise = new Promise((resolve) => {
       readyResolve = resolve;
     });
@@ -320,23 +343,17 @@
           return;
         }
         if (data.message === "page") {
-          if (ws.readyState !== WebSocket.OPEN) {
-            throw new Error("WebSocket is not open while sending an Opus page");
+          const page = new Uint8Array(asBytes(data.page));
+          if (isOpusHeaderPage(page)) {
+            headerPages.push(page);
+          } else {
+            audioPages.push(page);
           }
-          const page = asBytes(data.page);
-          const message = new Uint8Array(1 + page.length);
-          message[0] = OPUS_INPUT_KIND;
-          message.set(page, 1);
-          ws.send(message);
-          inputPackets += 1;
-          inputPacketsElement.textContent = String(inputPackets);
           return;
         }
-        if (data.message === "done") {
-          if (!done) {
-            done = true;
-            doneResolve();
-          }
+        if (data.message === "done" && !done) {
+          done = true;
+          doneResolve();
         }
       } catch (error) {
         failure.fail(error);
@@ -348,16 +365,73 @@
       await Promise.race([readyPromise, failure.promise]);
       worker.postMessage({ command: "getHeaderPages" });
 
-      await feedAtCadence(frames, 20, failure, (frame) => {
-        worker.postMessage({ command: "encode", buffers: [frame] });
-      });
+      for (let index = 0; index < frames.length; index += 1) {
+        worker.postMessage({ command: "encode", buffers: [frames[index]] });
+        if ((index + 1) % 256 === 0) {
+          await Promise.race([sleep(0), failure.promise]);
+        }
+      }
 
       worker.postMessage({ command: "done" });
       await Promise.race([donePromise, failure.promise]);
-      return { inputFrames: frames.length, inputPackets };
+
+      if (headerPages.length < 2) {
+        throw new Error(
+          `Official Opus pre-encode produced ${headerPages.length} header pages; expected OpusHead and OpusTags`,
+        );
+      }
+      if (audioPages.length === 0) {
+        throw new Error("Official Opus pre-encode produced no audio pages");
+      }
+
+      return {
+        inputFrames: frames.length,
+        headerPages,
+        audioPages,
+      };
     } finally {
       worker.terminate();
     }
+  }
+
+  async function sendPreencodedOpus(ws, preencoded, failure) {
+    let inputPackets = 0;
+
+    function sendPage(page) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("WebSocket is not open while sending an Opus page");
+      }
+      const message = new Uint8Array(1 + page.length);
+      message[0] = OPUS_INPUT_KIND;
+      message.set(page, 1);
+      ws.send(message);
+      inputPackets += 1;
+      inputPacketsElement.textContent = String(inputPackets);
+    }
+
+    for (const page of preencoded.headerPages) {
+      sendPage(page);
+    }
+
+    const framesPerPage = core.OFFICIAL_ENCODER_CONFIG.maxFramesPerPage;
+    await feedAtCadence(
+      preencoded.audioPages,
+      OPUS_PAGE_INTERVAL_MS,
+      failure,
+      (page) => sendPage(page),
+      (audioPagesSent) => {
+        const framesSent = Math.min(preencoded.inputFrames, audioPagesSent * framesPerPage);
+        inputFramesElement.textContent = String(framesSent);
+      },
+    );
+    inputFramesElement.textContent = String(preencoded.inputFrames);
+
+    return {
+      inputFrames: preencoded.inputFrames,
+      inputPackets,
+      inputHeaderPages: preencoded.headerPages.length,
+      inputAudioPages: preencoded.audioPages.length,
+    };
   }
 
   async function sha256Hex(bytes) {
@@ -427,20 +501,29 @@
     const url = websocketUrl();
     serverUrlElement.textContent = url;
     let session = null;
+    let preencodedOpus = null;
 
     try {
+      if (transport === "opus") {
+        setRunStatus("Pre-encoding the exact WAV with the bundled official Opus worker…");
+        preencodedOpus = await Promise.race([
+          preencodeOfficialOpus(selectedSource.source.pcmBytes, tailSeconds, failure),
+          failure.promise,
+        ]);
+      }
+
       setRunStatus(`Connecting fresh ${transport.toUpperCase()} session…`);
       session = await openWebSocket(url, failure, (bytes) => capture.consume(bytes));
       setRunStatus(
         transport === "pcm"
           ? "Replaying exact PCM16 at 80 ms cadence…"
-          : "Replaying through bundled official Opus worker at 20 ms cadence…",
+          : `Replaying pre-encoded official Opus pages at ${OPUS_PAGE_INTERVAL_MS} ms cadence…`,
       );
 
       const sendResult = await Promise.race([
         transport === "pcm"
           ? sendPcm(session.ws, selectedSource.source.pcmBytes, tailSeconds, failure)
-          : sendOfficialOpus(session.ws, selectedSource.source.pcmBytes, tailSeconds, failure),
+          : sendPreencodedOpus(session.ws, preencodedOpus, failure),
         failure.promise,
       ]);
 
@@ -466,6 +549,12 @@
       manifest.input_opus_pages = sendResult.inputPackets;
       manifest.output_packets = capture.outputPacketCount();
       manifest.settle_seconds = SETTLE_SECONDS;
+      if (transport === "opus") {
+        manifest.opus_preencoded_before_websocket = true;
+        manifest.opus_page_interval_ms = OPUS_PAGE_INTERVAL_MS;
+        manifest.input_opus_header_pages = sendResult.inputHeaderPages;
+        manifest.input_opus_audio_pages = sendResult.inputAudioPages;
+      }
 
       completedResult = {
         label: manifest.label,
