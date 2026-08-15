@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hibiki_mlx_realtime_api.config import RuntimeConfig
+from hibiki_mlx_realtime_api.config import (
+    RuntimeConfig,
+    SamplingProfile,
+    resolve_sampling_profile,
+)
 
 _REQUIRED_FILES = (
     "config.json",
@@ -85,12 +89,29 @@ class LoadedLanguageModel:
         if parallel_head is not None:
             parallel_head.reset()
 
-    def new_generator(self, *, max_steps: int, text_temperature: float = 0.4) -> Any:
+    def seed_sampling(self, seed: int) -> None:
+        """Reset MLX's process-global sampling RNG for one fresh realtime session."""
+        self.modules.mx.random.seed(seed)
+
+    def new_generator(
+        self,
+        *,
+        max_steps: int,
+        sampling_profile: SamplingProfile = "mlx-current",
+    ) -> Any:
+        """Create one Hibiki generator using a named, reproducible sampling policy."""
+        settings = resolve_sampling_profile(sampling_profile)
         return self.modules.models.LmGen(
             model=self.model,
             max_steps=max_steps,
-            text_sampler=self.modules.utils.Sampler(top_k=25, temp=text_temperature),
-            audio_sampler=self.modules.utils.Sampler(top_k=250, temp=0.8),
+            text_sampler=self.modules.utils.Sampler(
+                top_k=settings.text_top_k,
+                temp=settings.text_temperature,
+            ),
+            audio_sampler=self.modules.utils.Sampler(
+                top_k=settings.audio_top_k,
+                temp=settings.audio_temperature,
+            ),
             cfg_coef=1.0,
             check=False,
         )
