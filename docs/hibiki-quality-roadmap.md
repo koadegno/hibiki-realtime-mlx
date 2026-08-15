@@ -24,7 +24,7 @@ The remaining work is primarily translation fidelity, long-session stability, si
 - Do not accept a quality improvement that creates sustained `RTF >= 1.0`, growing queues, or audible stutter.
 - Prefer controlled A/B experiments over subjective one-off changes.
 - Preserve the exact tested input whenever possible so multiple model configurations see the same audio.
-- Treat `adaptive-reset` and `hold` as the two silence-policy candidates still worth exploring. `reset` and `adaptive-reset-cold` are currently rejected; see the experiment journal.
+- Treat `adaptive-reset` and `hold` as the two silence-policy candidates still worth exploring. `reset` and the historical cold profile are currently rejected; see the experiment journal.
 
 ## System map
 
@@ -108,7 +108,7 @@ The challenge set is now backed by a deterministic replay corpus rather than req
 
 # Stage 1 - Isolate input transport loss
 
-Status: **STAGE 1B IMPLEMENTED — WAITING FOR PHYSICAL M4 SAME-WAV A/B**
+Status: **COMPLETED FOR QUALITY ATTRIBUTION — INPUT TRANSPORT IS NOT THE DOMINANT EXPLANATION**
 
 ### Question
 
@@ -150,13 +150,14 @@ overloads            = 0
 
 Raw PCM transport is therefore not currently treated as intrinsically slower; the earlier slowdown remains recorded as a non-reproduced anomaly.
 
-### Deterministic corpus exists
+### Deterministic corpus
 
-The first Quality Lab WAV has been captured and successfully replayed through the raw-PCM client.
+The canonical Quality Lab WAV is:
 
 ```text
 format                24 kHz mono PCM16 WAV
-duration              about 193.28 s
+duration              193.28 s
+source samples         4,638,720
 source PCM SHA-256     22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
 ```
 
@@ -169,118 +170,183 @@ translated.wav
 manifest.json
 ```
 
-The first replay correctly distinguished the initial `la jeune fille` / `le jeune fils` challenge pair while still exposing useful lexical/semantic mistakes over the longer corpus.
+### Stage 1B result - exact same WAV through PCM and Opus
 
-### Stage 1B - exact same WAV through two transports
+The physical M4 Stage 1B experiment produced usable RAW PCM and bundled-official-Opus artifact sets from the same source identity.
 
-`/transport-replay.html` is the attribution harness.
-
-```text
-                     exact same source.wav
-                              |
-                    SHA-256 verified PCM
-                              |
-                +-------------+-------------+
-                |                           |
-                v                           v
-        raw PCM16 transport          bundled official Opus
-          websocket kind 0x03          websocket kind 0x01
-                |                           |
-                +-------------+-------------+
-                              |
-                              v
-                         same server
-                              |
-                              v
-                    same Rust Mimi encoder
-                              |
-                              v
-                    same Hibiki q4 MLX LM
-                              |
-                              v
-                    same Rust Mimi decoder
-```
-
-Raw mode sends exact 1920-sample / 80 ms PCM frames. Opus mode feeds exact 480-sample / 20 ms frames into the repository's bundled `encoderWorker.min.js` using the resolved 24 kHz frontend worker configuration. Because the canonical WAV is already 24 kHz, Stage 1B intentionally avoids device-rate resampling and isolates Opus encoding/page framing.
-
-Each transport opens a fresh websocket/session. Both use the same configurable deterministic tail, default six seconds. Browser pacing is absolute-clock based and fails closed if the tab falls materially behind instead of bursting queued frames.
-
-### Stage 1B acceptance rule
-
-Run PCM and Opus against the same unchanged `adaptive-reset` server configuration. Before comparing quality, require:
+Shared identity/result geometry:
 
 ```text
-same source_pcm_sha256
-same source_samples
-same tail_seconds
-same server URL
-RTF < 1.0
-no sustained queue growth
-overloads = 0
+source_pcm_sha256     22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
+source_samples        4,638,720
+source_seconds        193.28
+tail_seconds          6
+output_samples        4,778,880
+output_seconds        199.12
+output_packets        2,489
 ```
 
-Then compare transcript differences, challenge semantics, names/numbers/gender, omissions/repetitions, translated audio continuity, and stage p50/p95 telemetry.
+The controlled Opus run used the bundled worker at 24 kHz with 20 ms frames, two frames per page, no source resampling, and pre-encoded pages paced at 40 ms/page before the server.
 
-Current sampling is stochastic. One differing pair is evidence but not enough for a strong causal claim; materially different results should be repeated on the exact same WAV.
-
-### Decision gates
-
-**A — controlled Opus is consistently worse than raw PCM**
+Both transcripts preserve the opening challenge distinction:
 
 ```text
-Opus encoding/page framing materially contributes to lexical loss.
+PCM:
+The girl arrives tomorrow.
+The young son arrives tomorrow.
+
+Opus:
+The girl arrives tomorrow.
+The young son arrives tomorrow.
 ```
 
-Keep raw PCM as reference and continue Stage 1 by tuning/replacing the Opus transport before changing model sampling.
+The longer transcripts do differ, but neither transport wins consistently. Examples include:
 
-**B — controlled Opus and raw PCM are effectively equivalent**
+- PCM and Opus both make lexical/semantic mistakes after the controlled opening phrases;
+- Opus is better on some phrases (`a lovely, sweet woman` versus PCM's wrong `a charming girl`);
+- PCM is better on other passages, including some soldier/road wording;
+- omissions, substitutions, names, and numbers occur on both sides.
+
+This pattern is compatible with stochastic decoding variance being at least as large as the transport effect in this corpus. The experiment does **not** prove that Opus is lossless or equivalent to PCM; it does show that Opus compression/page framing is not currently supported as the dominant cause of Hibiki's lexical mistakes.
+
+### Deferred Stage 1 robustness issue
+
+A separate replay robustness problem remains: some later Opus sessions can close with websocket `1013` / `translation backend overloaded`. That issue is retained for later debugging but is **not a Stage 2 quality blocker** because the accepted Stage 1B artifacts completed and the roadmap question is transport attribution, not multi-run harness robustness.
+
+### Stage 1 decision
 
 ```text
-Opus compression itself is unlikely to explain the live-browser quality gap.
+DO NOT spend the next quality cycle tuning Opus.
+DO NOT attribute girl/boy, numbers, names, or omission errors primarily to transport.
+USE raw PCM as the controlled reference transport for the next stages.
+MOVE to decode-policy/sampling attribution.
 ```
 
-Open Stage 1C focused narrowly on native-rate -> 24 kHz resampling and microphone preprocessing.
-
-**C — repeated runs vary more than the transport difference**
-
-```text
-Transport effect is below current stochastic output variance.
-```
-
-Record Stage 1B as inconclusive and do only the minimum decode-policy determinism work needed to make the transport comparison interpretable.
-
-Stage 2 does not begin until this gate is interpreted.
+This is the roadmap's Gate C interpretation: observed output variance prevents a strong small-effect transport attribution, so the next experiment reduces decode-policy variance before changing precision or training.
 
 ---
 
 # Stage 2 - Decode-policy parity and sampling sweep
 
-Status: **PLANNED**
+Status: **IMPLEMENTED — WAITING FOR PHYSICAL M4 PROFILE REPLAYS**
 
 ### Question
 
 How much translation variance/error is introduced by our text decoding policy rather than the acoustic/model representation?
 
-### Profiles
+### Controlled profiles
 
-Run the exact same replay corpus through at least:
+Run the exact same canonical WAV through **Raw PCM16LE only** with:
 
 ```text
-mlx-port-current    text temp 0.4, top-k 25
+mlx-current         text temp 0.4, top-k 25
 kyutai-reference    text temp 0.8, top-k 250
-greedy              text temp 0.0
-controlled variants around the best profile
+greedy              text temp 0.0, argmax
 ```
 
-Do not reuse the previous `0.2` live failure as a quality result: that run entered `RTF > 1` and saturated the queue, so it confounded quality and execution behavior.
+The historical `0.2 / top-k 25` configuration is retained under the explicit name `historical-cold-0.2` for reproducibility only. Its old run entered `RTF > 1` and saturated the queue, so it is not a Stage 2 quality candidate.
 
-### Deliverable
+For every candidate, keep the audio sampler fixed:
 
-Expose named sampling profiles rather than hand-edited constants, seed the sampler where deterministic behavior is possible, and emit the active sampling profile in startup/session logs.
+```text
+audio temp 0.8
+audio top-k 250
+```
+
+This stage changes text decoding only.
+
+### Reproducibility controls
+
+The service now has named sampling profiles and a default session seed:
+
+```text
+sampling_seed = 299792458
+```
+
+Each fresh websocket session:
+
+1. resets Hibiki streaming caches;
+2. seeds the MLX random sampler once;
+3. creates the profile-specific generator;
+4. keeps RNG evolution continuous when `adaptive-reset` creates a replacement generator after a natural silence park.
+
+`greedy` uses text temperature zero, which maps to argmax in the pinned sampler. This removes text-token categorical sampling. Audio sampling remains stochastic, but the identical per-session seed makes repeated greedy replays the first direct repeatability check for the complete autoregressive system.
+
+### Runtime identity
+
+`GET /ready` now exposes the exact process sampling configuration:
+
+```json
+{
+  "sampling_profile": "greedy",
+  "sampling_seed": 299792458,
+  "text_temperature": 0.0,
+  "text_top_k": 250,
+  "audio_temperature": 0.8,
+  "audio_top_k": 250
+}
+```
+
+`/transport-replay.html` reads this identity before opening the websocket. Raw-PCM Stage 2 manifests and filenames include the profile, for example:
+
+```text
+stage2-greedy-pcm-transcript.txt
+stage2-greedy-pcm-translated.wav
+stage2-greedy-pcm-manifest.json
+```
+
+A run is rejected before artifact creation if runtime sampling metadata cannot be resolved.
+
+### M4 experiment commands
+
+Use one clean server process per candidate profile:
+
+```text
+task hibiki-mlx:serve:rust:adaptive-reset:mlx-current
+task hibiki-mlx:serve:rust:adaptive-reset:kyutai-reference
+task hibiki-mlx:serve:rust:adaptive-reset:greedy
+```
+
+For every run:
+
+```text
+transport        Raw PCM16LE
+source           canonical SHA above
+tail             6 seconds
+silence policy   adaptive-reset
+codec            Rust Mimi
+LM               Hibiki q4 MLX
+```
+
+Run `greedy` at least twice with the exact same server/profile/source. The two sessions are independently reseeded with the same seed.
 
 ### Decision gate
 
-Keep the profile with the best repeatable lexical accuracy subject to:
+**Greedy is repeatable and materially better**
+
+```text
+Text sampling is a meaningful contributor to lexical mistakes.
+```
+
+Continue a controlled low-variance sampling sweep around the best policy.
+
+**Greedy is repeatable but repeats the same lexical mistakes**
+
+```text
+The mistake is likely upstream of text sampling or represented directly in the model/logits.
+```
+
+Move to Stage 3 quantization fidelity using the same corpus.
+
+**`mlx-current` or `kyutai-reference` is better than greedy**
+
+Keep stochastic text sampling, but choose the best reproducible profile subject to realtime constraints.
+
+**Repeated greedy runs differ materially despite the same fixed seed**
+
+Do not judge profile quality yet. Isolate the remaining stochastic feedback (most likely audio sampling/model feedback) with the minimum additional determinism needed.
+
+Every candidate remains subject to:
 
 ```text
 sustained RTF < 0.8 preferred
@@ -400,7 +466,7 @@ Status: **PARTIALLY EXPLORED**
 adaptive-reset   worth keeping for experiments
 hold             worth keeping for experiments
 reset            rejected in current form
-adaptive-reset-cold rejected
+historical cold sampling/reset experiment rejected
 ```
 
 The final policy must satisfy two independent clocks:
