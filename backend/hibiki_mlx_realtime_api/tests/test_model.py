@@ -52,6 +52,14 @@ class FakeModel:
         self.warmup_arg = condition
 
 
+class FakeRandom:
+    def __init__(self) -> None:
+        self.seeds: list[int] = []
+
+    def seed(self, value: int) -> None:
+        self.seeds.append(value)
+
+
 class FakeMx:
     gpu = "gpu"
     bfloat16 = "bf16"
@@ -59,6 +67,7 @@ class FakeMx:
     def __init__(self) -> None:
         self.device = None
         self.evaluated: list[object] = []
+        self.random = FakeRandom()
 
     def set_default_device(self, device: object) -> None:
         self.device = device
@@ -125,7 +134,9 @@ def test_resolve_model_files_pins_revision_and_required_artifacts(tmp_path: Path
     ]
 
 
-def test_load_language_model_uses_gpu_q4_strict_weights_and_hibiki_samplers(tmp_path: Path) -> None:
+def test_load_language_model_uses_gpu_q4_strict_weights_and_named_hibiki_samplers(
+    tmp_path: Path,
+) -> None:
     files = _write_model_files(tmp_path)
     fake_model = FakeModel()
     mx = FakeMx()
@@ -152,9 +163,13 @@ def test_load_language_model_uses_gpu_q4_strict_weights_and_hibiki_samplers(tmp_
     )
 
     loaded = load_language_model(files, modules=modules)
-    generator = loaded.new_generator(max_steps=500)
+    loaded.seed_sampling(123)
+    current = loaded.new_generator(max_steps=500, sampling_profile="mlx-current")
+    reference = loaded.new_generator(max_steps=500, sampling_profile="kyutai-reference")
+    greedy = loaded.new_generator(max_steps=500, sampling_profile="greedy")
 
     assert mx.device == "gpu"
+    assert mx.random.seeds == [123]
     assert fake_model.dtype == "bf16"
     assert nn.quantize_calls[0]["bits"] == 4
     assert nn.quantize_calls[0]["group_size"] == 32
@@ -163,12 +178,16 @@ def test_load_language_model_uses_gpu_q4_strict_weights_and_hibiki_samplers(tmp_
     assert fake_model.warmup_arg == "condition"
     assert mx.evaluated == ["parameters", "parameters"]
     assert config_calls == [{"dep_q": 16, "n_q": 32}]
-    assert generator.kwargs["model"] is fake_model
-    assert generator.kwargs["max_steps"] == 500
-    assert generator.kwargs["text_sampler"].kwargs == {"top_k": 25, "temp": 0.4}
-    assert generator.kwargs["audio_sampler"].kwargs == {"top_k": 250, "temp": 0.8}
-    assert generator.kwargs["cfg_coef"] == 1.0
-    assert generator.kwargs["check"] is False
+    assert current.kwargs["model"] is fake_model
+    assert current.kwargs["max_steps"] == 500
+    assert current.kwargs["text_sampler"].kwargs == {"top_k": 25, "temp": 0.4}
+    assert current.kwargs["audio_sampler"].kwargs == {"top_k": 250, "temp": 0.8}
+    assert reference.kwargs["text_sampler"].kwargs == {"top_k": 250, "temp": 0.8}
+    assert reference.kwargs["audio_sampler"].kwargs == {"top_k": 250, "temp": 0.8}
+    assert greedy.kwargs["text_sampler"].kwargs == {"top_k": 250, "temp": 0.0}
+    assert greedy.kwargs["audio_sampler"].kwargs == {"top_k": 250, "temp": 0.8}
+    assert current.kwargs["cfg_coef"] == 1.0
+    assert current.kwargs["check"] is False
 
     loaded.reset_state()
     assert [cache.reset_calls for cache in fake_model.transformer_cache] == [1, 1]
