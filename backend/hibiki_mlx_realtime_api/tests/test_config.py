@@ -21,11 +21,10 @@ def test_runtime_config_defaults_to_mlx_codec() -> None:
 
 
 def test_sampling_profiles_resolve_exact_settings() -> None:
-    resolve_sampling_profile = getattr(config_module, "resolve_sampling_profile")
-    current = resolve_sampling_profile("mlx-current")
-    reference = resolve_sampling_profile("kyutai-reference")
-    greedy = resolve_sampling_profile("greedy")
-    cold = resolve_sampling_profile("historical-cold-0.2")
+    current = config_module.resolve_sampling_profile("mlx-current")
+    reference = config_module.resolve_sampling_profile("kyutai-reference")
+    greedy = config_module.resolve_sampling_profile("greedy")
+    cold = config_module.resolve_sampling_profile("historical-cold-0.2")
 
     assert (current.text_temperature, current.text_top_k) == (0.4, 25)
     assert (reference.text_temperature, reference.text_top_k) == (0.8, 250)
