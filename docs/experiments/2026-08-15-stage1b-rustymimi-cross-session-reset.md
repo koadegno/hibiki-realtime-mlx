@@ -2,7 +2,7 @@
 
 Date: 2026-08-15
 
-Status: **RAW PCM ACCEPTED; FIRST OPUS RUN INVALIDATED; RUST CROSS-SESSION STATE FIXED IN CODE.**
+Status: **FIRST PCM/OPUS PAIR INVALID FOR FINAL ATTRIBUTION; RUST SESSION STATE FIXED IN CODE; CLEAN A/B RERUN REQUIRED.**
 
 ## Canonical source
 
@@ -26,7 +26,7 @@ output duration     199.12 s
 transcript chars    1359
 ```
 
-The generated manifest and artifacts are complete. This run remains a valid Stage 1B raw-PCM specimen.
+The generated manifest and artifacts are complete and remain useful as a historical raw-PCM specimen.
 
 Its transcript begins with the first two challenge utterances represented separately:
 
@@ -36,6 +36,12 @@ The young son arrives tomorrow.
 ```
 
 The first translation omits `young`, but the first utterance itself is not missing.
+
+### Why the RAW run must also be repeated for the final A/B
+
+Before the first WebSocket, process startup created the process-wide Rust Mimi pair, ran one warmup frame through it, then called `reset()` and reused that same pair for the RAW session.
+
+The upstream reset bug described below means that this warmup/reset sequence was not equivalent to constructing a fresh tokenizer. The contamination is tiny compared with the later Opus run, but Stage 1B is intended to be a strict transport-only experiment. Therefore this completed RAW artifact set is retained for evidence and debugging but is not the final clean comparator.
 
 ## First Opus run
 
@@ -53,7 +59,7 @@ browser error             websocket 1011: translation worker failed
 
 `6422 * 20 ms = 128.44 s`, so the Opus result contains only a prefix of the source. Its partial transcript also omitted the first challenge utterance.
 
-**Do not use that omission as evidence against Opus.** The backend was not starting the second transport with truly fresh Rust Mimi state.
+**Do not use that omission as evidence against Opus.** The backend was not starting this transport with fresh Rust Mimi state.
 
 ## Backend failure
 
@@ -67,9 +73,10 @@ ValueError: narrow invalid args start + len > dim_len:
 The failure occurred after approximately:
 
 ```text
-first RAW websocket     ~= 199 s
-second Opus websocket   ~= 128 s
-cumulative wall audio   ~= 327 s
+startup Mimi warmup       small non-zero advance
+first RAW websocket      ~= 199 s
+second Opus websocket    ~= 128 s
+cumulative streamed time ~= 327 s
 ```
 
 The Rust Mimi transformer operates internally at 25 Hz. The cumulative position is therefore close to the configured 8192-step positional limit:
@@ -78,7 +85,7 @@ The Rust Mimi transformer operates internally at 25 Hz. The cumulative position 
 327 s * 25 Hz ~= 8175 transformer steps
 ```
 
-This matches the exact failing RoPE position.
+The exact internal framing/warmup advance accounts for the remaining small difference and the failure is at the exact configured boundary, `start=8192`.
 
 ## Root cause in rustymimi 0.4.1
 
@@ -91,24 +98,24 @@ In that release:
 3. `reset_kv_cache()` clears the KV cache but does not reset that `pos` counter;
 4. `Mimi.reset_state()` in this release also does not reset its `downsample` streaming module.
 
-Our runtime compounded the upstream behavior by constructing one process-wide Rust `CodecPair` and passing it to every WebSocket. `RealtimeSession.start()` called `reset()`, but that reset was insufficient to make rustymimi 0.4.1 equivalent to a newly constructed tokenizer.
+Our runtime compounded the upstream behavior by constructing one process-wide Rust `CodecPair`, warming it once, then passing that same pair to every WebSocket. `RealtimeSession.start()` called `reset()`, but that reset was insufficient to make rustymimi 0.4.1 equivalent to a newly constructed tokenizer.
 
 Consequences:
 
 ```text
-websocket A advances Rust Mimi absolute streaming state
-             |
-             v
+startup warmup / websocket A advances Rust Mimi state
+                  |
+                  v
 Tokenizer.reset() clears only part of that state
-             |
-             v
-websocket B starts with stale Mimi position/history machinery
-             |
-             v
+                  |
+                  v
+next websocket begins with constructor-owned state not fully fresh
+                  |
+                  v
 cumulative RoPE position eventually reaches 8192
 ```
 
-The first Opus transcript is therefore contaminated from its first frame, not merely truncated at the final exception.
+The first Opus transcript is therefore invalid for transport attribution from its first frame, not merely truncated at the final exception. The prior RAW session is much less affected, but its startup warmup contamination also prevents using the old PCM/Opus pair as a strict final A/B.
 
 ## Fix
 
@@ -155,16 +162,16 @@ GitHub Actions passed lockfile verification, Ruff, all Python tests, browser Jav
 
 ## Scope / remaining limitation
 
-This fix addresses **cross-WebSocket state contamination**. It deliberately does not hide the separate `max_seq_len=8192` limitation by choosing an arbitrary huge Rust Mimi cache.
+This fix addresses **startup/cross-WebSocket Rust Mimi state contamination**. It deliberately does not hide the separate `max_seq_len=8192` limitation by choosing an arbitrary huge Rust Mimi cache.
 
-A single uninterrupted Rust Mimi session long enough to exhaust its configured positional table remains a separate long-session engineering problem.
+A single uninterrupted Rust Mimi session long enough to exhaust its configured positional table remains a separate long-session engineering problem. The current Stage 1B source plus tail is about 199 seconds and is below that single-session boundary when started from fresh Mimi state.
 
 ## Stage 1B decision
 
 ```text
-RAW PCM specimen       KEEP / VALID
-first Opus specimen    INVALIDATE
-Stage 1 transport gate NOT DECIDED
+first RAW specimen      KEEP AS HISTORICAL EVIDENCE; RERUN FOR CLEAN A/B
+first Opus specimen     INVALIDATE
+Stage 1 transport gate  NOT DECIDED
 ```
 
-Only the Opus arm needs to be rerun after updating and restarting the server. Use the exact same WAV, SHA, adaptive-reset settings, and six-second tail. The existing completed RAW artifact set does not need to be repeated for this bug fix.
+After updating and restarting the server, rerun **both** transports with the exact same WAV, SHA, adaptive-reset settings, and six-second tail. The new runtime guarantees a newly constructed Rust Mimi encoder/decoder pair for each WebSocket, so the rerun restores the intended invariant: transport is the only variable between the two arms.
