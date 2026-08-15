@@ -1,0 +1,547 @@
+(() => {
+  "use strict";
+
+  const core = globalThis.HibikiTransportReplayCore;
+  if (!core) {
+    throw new Error("HibikiTransportReplayCore is not loaded");
+  }
+
+  const PCM_INPUT_KIND = 3;
+  const OPUS_INPUT_KIND = 1;
+  const SETTLE_SECONDS = 1;
+  const MAX_SCHEDULER_LAG_MS = 250;
+
+  const sourceFileElement = document.getElementById("sourceFile");
+  const transportElement = document.getElementById("transport");
+  const tailSecondsElement = document.getElementById("tailSeconds");
+  const runButton = document.getElementById("run");
+  const cancelButton = document.getElementById("cancel");
+  const sourceHashElement = document.getElementById("sourceHash");
+  const sourceSamplesElement = document.getElementById("sourceSamples");
+  const sourceDurationElement = document.getElementById("sourceDuration");
+  const runStatusElement = document.getElementById("runStatus");
+  const serverUrlElement = document.getElementById("serverUrl");
+  const inputFramesElement = document.getElementById("inputFrames");
+  const inputPacketsElement = document.getElementById("inputPackets");
+  const outputPacketsElement = document.getElementById("outputPackets");
+  const outputSamplesElement = document.getElementById("outputSamples");
+  const errorElement = document.getElementById("error");
+  const transcriptElement = document.getElementById("transcript");
+  const downloadSourceButton = document.getElementById("downloadSource");
+  const downloadTranscriptButton = document.getElementById("downloadTranscript");
+  const downloadTranslatedButton = document.getElementById("downloadTranslated");
+  const downloadManifestButton = document.getElementById("downloadManifest");
+
+  let selectedSource = null;
+  let completedResult = null;
+  let activeFailure = null;
+
+  function websocketUrl() {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/api/chat`;
+  }
+
+  function setError(message) {
+    errorElement.textContent = message || "";
+  }
+
+  function setRunStatus(message) {
+    runStatusElement.textContent = message;
+  }
+
+  function setArtifactButtons(enabled) {
+    for (const button of [
+      downloadSourceButton,
+      downloadTranscriptButton,
+      downloadTranslatedButton,
+      downloadManifestButton,
+    ]) {
+      button.disabled = !enabled;
+    }
+  }
+
+  function setRunning(running) {
+    sourceFileElement.disabled = running;
+    transportElement.disabled = running;
+    tailSecondsElement.disabled = running;
+    runButton.disabled = running || selectedSource === null;
+    cancelButton.disabled = !running;
+  }
+
+  function resetCounters() {
+    inputFramesElement.textContent = "0";
+    inputPacketsElement.textContent = "0";
+    outputPacketsElement.textContent = "0";
+    outputSamplesElement.textContent = "0";
+    transcriptElement.textContent = "";
+  }
+
+  function createFailureChannel() {
+    let rejectFailure;
+    let failed = false;
+    const promise = new Promise((_, reject) => {
+      rejectFailure = reject;
+    });
+    promise.catch(() => undefined);
+    return {
+      promise,
+      fail(error) {
+        if (failed) return;
+        failed = true;
+        rejectFailure(error instanceof Error ? error : new Error(String(error)));
+      },
+    };
+  }
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  }
+
+  async function waitUntil(deadline, failure) {
+    const delay = deadline - performance.now();
+    if (delay > 0) {
+      await Promise.race([sleep(delay), failure.promise]);
+    }
+    const lag = performance.now() - deadline;
+    if (lag > MAX_SCHEDULER_LAG_MS) {
+      throw new Error(
+        `Browser replay clock fell ${lag.toFixed(0)} ms behind. Keep this tab active and rerun; ` +
+          "the experiment will not burst queued frames to catch up.",
+      );
+    }
+  }
+
+  async function feedAtCadence(frames, intervalMs, failure, sendFrame) {
+    let deadline = performance.now();
+    for (let index = 0; index < frames.length; index += 1) {
+      if (index > 0) {
+        deadline += intervalMs;
+        await waitUntil(deadline, failure);
+      }
+      await Promise.race([Promise.resolve(sendFrame(frames[index], index)), failure.promise]);
+      inputFramesElement.textContent = String(index + 1);
+    }
+  }
+
+  function asBytes(value) {
+    if (value instanceof Uint8Array) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    if (value instanceof ArrayBuffer) {
+      return new Uint8Array(value);
+    }
+    if (ArrayBuffer.isView(value)) {
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    }
+    throw new Error("Expected binary worker/server payload");
+  }
+
+  function concatenateFloat32(parts) {
+    const total = parts.reduce((sum, part) => sum + part.length, 0);
+    const output = new Float32Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      output.set(part, offset);
+      offset += part.length;
+    }
+    return output;
+  }
+
+  function createCapture(failure) {
+    const textParts = [];
+    const audioParts = [];
+    let outputPackets = 0;
+    const decoder = new Worker("/decoderWorker.min.js");
+
+    decoder.onerror = (event) => {
+      failure.fail(new Error(`Translated Opus decoder failed: ${event.message || "worker error"}`));
+    };
+    decoder.onmessage = (event) => {
+      try {
+        if (!event.data || !event.data[0]) return;
+        const value = event.data[0];
+        const frame = value instanceof Float32Array ? value : new Float32Array(value);
+        if (frame.length === 0) return;
+        audioParts.push(new Float32Array(frame));
+        outputSamplesElement.textContent = String(
+          audioParts.reduce((sum, part) => sum + part.length, 0),
+        );
+      } catch (error) {
+        failure.fail(error);
+      }
+    };
+    decoder.postMessage({
+      command: "init",
+      bufferLength: 960,
+      decoderSampleRate: core.SAMPLE_RATE,
+      outputBufferSampleRate: core.SAMPLE_RATE,
+      resampleQuality: 0,
+    });
+
+    return {
+      decoder,
+      consume(bytes) {
+        if (bytes.length === 0) {
+          throw new Error("Received an empty Hibiki server message");
+        }
+        const kind = bytes[0];
+        const payload = bytes.slice(1);
+        if (kind === 1) {
+          outputPackets += 1;
+          outputPacketsElement.textContent = String(outputPackets);
+          decoder.postMessage({ command: "decode", pages: payload });
+          return;
+        }
+        if (kind === 2) {
+          const text = new TextDecoder().decode(payload);
+          textParts.push(text);
+          transcriptElement.textContent = textParts.join("");
+          return;
+        }
+        throw new Error(`Unexpected Hibiki server message kind after handshake: ${kind}`);
+      },
+      transcript() {
+        return textParts.join("");
+      },
+      translatedPcm() {
+        return concatenateFloat32(audioParts);
+      },
+      outputPacketCount() {
+        return outputPackets;
+      },
+    };
+  }
+
+  function openWebSocket(url, failure, consume) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      let ready = false;
+      let intentionallyClosed = false;
+      let handshakeSettled = false;
+      const timeout = window.setTimeout(() => {
+        if (handshakeSettled) return;
+        handshakeSettled = true;
+        reject(new Error("WebSocket handshake timed out after 10 seconds"));
+        ws.close();
+      }, 10000);
+
+      function fail(error) {
+        if (!ready && !handshakeSettled) {
+          handshakeSettled = true;
+          window.clearTimeout(timeout);
+          reject(error);
+          return;
+        }
+        failure.fail(error);
+      }
+
+      ws.onerror = () => fail(new Error(`WebSocket error while connected to ${url}`));
+      ws.onclose = (event) => {
+        if (intentionallyClosed) return;
+        fail(
+          new Error(
+            `WebSocket closed before replay completion: code=${event.code} ` +
+              `reason=${event.reason || "none"}`,
+          ),
+        );
+      };
+      ws.onmessage = (event) => {
+        try {
+          const bytes = asBytes(event.data);
+          if (!ready) {
+            if (bytes.length !== 1 || bytes[0] !== 0) {
+              throw new Error("Expected the Hibiki kind-0 handshake before output data");
+            }
+            ready = true;
+            handshakeSettled = true;
+            window.clearTimeout(timeout);
+            resolve({
+              ws,
+              close() {
+                intentionallyClosed = true;
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.close(1000, "Stage 1B replay complete");
+                } else if (ws.readyState === WebSocket.CONNECTING) {
+                  ws.close();
+                }
+              },
+            });
+            return;
+          }
+          consume(bytes);
+        } catch (error) {
+          fail(error);
+        }
+      };
+    });
+  }
+
+  async function sendPcm(ws, pcmBytes, tailSeconds, failure) {
+    const frames = core.createPcmFrames(pcmBytes, tailSeconds);
+    await feedAtCadence(frames, 80, failure, (frame) => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("WebSocket is not open while sending raw PCM");
+      }
+      const message = new Uint8Array(1 + frame.length);
+      message[0] = PCM_INPUT_KIND;
+      message.set(frame, 1);
+      ws.send(message);
+    });
+    return { inputFrames: frames.length, inputPackets: 0 };
+  }
+
+  async function sendOfficialOpus(ws, pcmBytes, tailSeconds, failure) {
+    const frames = core.createOpusFrames(pcmBytes, tailSeconds);
+    const worker = new Worker("/encoderWorker.min.js");
+    let readyResolve;
+    let doneResolve;
+    let ready = false;
+    let done = false;
+    let inputPackets = 0;
+    const readyPromise = new Promise((resolve) => {
+      readyResolve = resolve;
+    });
+    const donePromise = new Promise((resolve) => {
+      doneResolve = resolve;
+    });
+
+    worker.onerror = (event) => {
+      failure.fail(new Error(`Official Opus encoder failed: ${event.message || "worker error"}`));
+    };
+    worker.onmessage = (event) => {
+      try {
+        const data = event.data || {};
+        if (data.message === "ready") {
+          if (!ready) {
+            ready = true;
+            readyResolve();
+          }
+          return;
+        }
+        if (data.message === "page") {
+          if (ws.readyState !== WebSocket.OPEN) {
+            throw new Error("WebSocket is not open while sending an Opus page");
+          }
+          const page = asBytes(data.page);
+          const message = new Uint8Array(1 + page.length);
+          message[0] = OPUS_INPUT_KIND;
+          message.set(page, 1);
+          ws.send(message);
+          inputPackets += 1;
+          inputPacketsElement.textContent = String(inputPackets);
+          return;
+        }
+        if (data.message === "done") {
+          if (!done) {
+            done = true;
+            doneResolve();
+          }
+        }
+      } catch (error) {
+        failure.fail(error);
+      }
+    };
+
+    try {
+      worker.postMessage({ command: "init", ...core.OFFICIAL_ENCODER_CONFIG });
+      await Promise.race([readyPromise, failure.promise]);
+      worker.postMessage({ command: "getHeaderPages" });
+
+      await feedAtCadence(frames, 20, failure, (frame) => {
+        worker.postMessage({ command: "encode", buffers: [frame] });
+      });
+
+      worker.postMessage({ command: "done" });
+      await Promise.race([donePromise, failure.promise]);
+      return { inputFrames: frames.length, inputPackets };
+    } finally {
+      worker.terminate();
+    }
+  }
+
+  async function sha256Hex(bytes) {
+    const copy = bytes.slice();
+    const digest = await crypto.subtle.digest("SHA-256", copy.buffer);
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  }
+
+  async function loadSourceFile() {
+    const file = sourceFileElement.files && sourceFileElement.files[0];
+    selectedSource = null;
+    completedResult = null;
+    setArtifactButtons(false);
+    setError("");
+    sourceHashElement.textContent = "—";
+    sourceSamplesElement.textContent = "—";
+    sourceDurationElement.textContent = "—";
+    runButton.disabled = true;
+
+    if (!file) {
+      setRunStatus("Load a source WAV.");
+      return;
+    }
+
+    try {
+      setRunStatus("Validating source WAV…");
+      const originalWav = new Uint8Array(await file.arrayBuffer());
+      const source = core.parsePcm16Wav(originalWav);
+      const sourceHash = await sha256Hex(source.pcmBytes);
+      selectedSource = { fileName: file.name, originalWav, source, sourceHash };
+      sourceHashElement.textContent = sourceHash;
+      sourceSamplesElement.textContent = String(source.samples);
+      sourceDurationElement.textContent = `${(source.samples / core.SAMPLE_RATE).toFixed(2)} s`;
+      setRunStatus("Source is canonical and ready.");
+      runButton.disabled = false;
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      setRunStatus("Source rejected.");
+    }
+  }
+
+  async function runTransport() {
+    if (!selectedSource || activeFailure) return;
+
+    const tailSeconds = Number(tailSecondsElement.value);
+    if (!Number.isFinite(tailSeconds) || tailSeconds < 0) {
+      setError("Silence tail must be a finite number >= 0.");
+      return;
+    }
+    const transport = transportElement.value;
+    if (transport !== "pcm" && transport !== "opus") {
+      setError(`Unknown transport: ${transport}`);
+      return;
+    }
+
+    completedResult = null;
+    setArtifactButtons(false);
+    resetCounters();
+    setError("");
+    setRunning(true);
+
+    const failure = createFailureChannel();
+    activeFailure = failure;
+    const capture = createCapture(failure);
+    const url = websocketUrl();
+    serverUrlElement.textContent = url;
+    let session = null;
+
+    try {
+      setRunStatus(`Connecting fresh ${transport.toUpperCase()} session…`);
+      session = await openWebSocket(url, failure, (bytes) => capture.consume(bytes));
+      setRunStatus(
+        transport === "pcm"
+          ? "Replaying exact PCM16 at 80 ms cadence…"
+          : "Replaying through bundled official Opus worker at 20 ms cadence…",
+      );
+
+      const sendResult = await Promise.race([
+        transport === "pcm"
+          ? sendPcm(session.ws, selectedSource.source.pcmBytes, tailSeconds, failure)
+          : sendOfficialOpus(session.ws, selectedSource.source.pcmBytes, tailSeconds, failure),
+        failure.promise,
+      ]);
+
+      setRunStatus("Source + deterministic tail sent; settling translated output…");
+      await Promise.race([sleep(SETTLE_SECONDS * 1000), failure.promise]);
+      session.close();
+
+      const transcript = capture.transcript();
+      const translatedPcm = capture.translatedPcm();
+      const translatedWav = core.writePcm16Wav(translatedPcm);
+      const manifest = core.buildManifest({
+        label: `stage1b-${transport}`,
+        serverUrl: url,
+        sourcePcmSha256: selectedSource.sourceHash,
+        sourceSamples: selectedSource.source.samples,
+        tailSeconds,
+        outputSamples: translatedPcm.length,
+        transcriptChars: transcript.length,
+        transport,
+      });
+      manifest.source_file_name = selectedSource.fileName;
+      manifest.input_frames = sendResult.inputFrames;
+      manifest.input_opus_pages = sendResult.inputPackets;
+      manifest.output_packets = capture.outputPacketCount();
+      manifest.settle_seconds = SETTLE_SECONDS;
+
+      completedResult = {
+        label: manifest.label,
+        sourceWav: selectedSource.originalWav.slice(),
+        transcript,
+        translatedWav,
+        manifest,
+      };
+      outputSamplesElement.textContent = String(translatedPcm.length);
+      setArtifactButtons(true);
+      setRunStatus(
+        `Completed ${transport.toUpperCase()} run. Download all four artifacts before changing transport.`,
+      );
+    } catch (error) {
+      setRunStatus("Run failed — no completed manifest/artifact set was accepted.");
+      setError(error instanceof Error ? error.message : String(error));
+      completedResult = null;
+      setArtifactButtons(false);
+    } finally {
+      if (session) session.close();
+      capture.decoder.terminate();
+      activeFailure = null;
+      setRunning(false);
+    }
+  }
+
+  function downloadBytes(bytes, mimeType, fileName) {
+    const blob = new Blob([bytes], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function requireCompletedResult() {
+    if (!completedResult) {
+      throw new Error("No completed Stage 1B run is available for download");
+    }
+    return completedResult;
+  }
+
+  sourceFileElement.addEventListener("change", loadSourceFile);
+  runButton.addEventListener("click", runTransport);
+  cancelButton.addEventListener("click", () => {
+    if (activeFailure) activeFailure.fail(new Error("Run cancelled by user"));
+  });
+  downloadSourceButton.addEventListener("click", () => {
+    const result = requireCompletedResult();
+    downloadBytes(result.sourceWav, "audio/wav", `${result.label}-source.wav`);
+  });
+  downloadTranscriptButton.addEventListener("click", () => {
+    const result = requireCompletedResult();
+    downloadBytes(
+      new TextEncoder().encode(result.transcript),
+      "text/plain;charset=utf-8",
+      `${result.label}-transcript.txt`,
+    );
+  });
+  downloadTranslatedButton.addEventListener("click", () => {
+    const result = requireCompletedResult();
+    downloadBytes(result.translatedWav, "audio/wav", `${result.label}-translated.wav`);
+  });
+  downloadManifestButton.addEventListener("click", () => {
+    const result = requireCompletedResult();
+    downloadBytes(
+      new TextEncoder().encode(`${JSON.stringify(result.manifest, null, 2)}\n`),
+      "application/json",
+      `${result.label}-manifest.json`,
+    );
+  });
+
+  serverUrlElement.textContent = websocketUrl();
+  setArtifactButtons(false);
+  setRunning(false);
+})();
