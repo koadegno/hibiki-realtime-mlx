@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from hibiki_mlx_realtime_api.config import RuntimeConfig, resolve_sampling_profile
+import hibiki_mlx_realtime_api.config as config_module
+from hibiki_mlx_realtime_api.config import RuntimeConfig
 
 
 def test_runtime_config_defaults_to_mlx_codec() -> None:
@@ -20,6 +21,7 @@ def test_runtime_config_defaults_to_mlx_codec() -> None:
 
 
 def test_sampling_profiles_resolve_exact_settings() -> None:
+    resolve_sampling_profile = getattr(config_module, "resolve_sampling_profile")
     current = resolve_sampling_profile("mlx-current")
     reference = resolve_sampling_profile("kyutai-reference")
     greedy = resolve_sampling_profile("greedy")
