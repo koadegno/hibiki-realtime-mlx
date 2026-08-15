@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from hibiki_mlx_realtime_api.config import RuntimeConfig
+from hibiki_mlx_realtime_api.config import RuntimeConfig, resolve_sampling_profile
 
 
 def test_runtime_config_defaults_to_mlx_codec() -> None:
@@ -15,7 +15,22 @@ def test_runtime_config_defaults_to_mlx_codec() -> None:
     assert config.queue_capacity == 16
     assert config.telemetry_interval_frames == 125
     assert config.silence_mode == "none"
-    assert config.text_temperature == 0.4
+    assert config.sampling_profile == "mlx-current"
+    assert config.sampling_seed == 299792458
+
+
+def test_sampling_profiles_resolve_exact_settings() -> None:
+    current = resolve_sampling_profile("mlx-current")
+    reference = resolve_sampling_profile("kyutai-reference")
+    greedy = resolve_sampling_profile("greedy")
+    cold = resolve_sampling_profile("historical-cold-0.2")
+
+    assert (current.text_temperature, current.text_top_k) == (0.4, 25)
+    assert (reference.text_temperature, reference.text_top_k) == (0.8, 250)
+    assert (greedy.text_temperature, greedy.text_top_k) == (0.0, 250)
+    assert (cold.text_temperature, cold.text_top_k) == (0.2, 25)
+    for profile in (current, reference, greedy, cold):
+        assert (profile.audio_temperature, profile.audio_top_k) == (0.8, 250)
 
 
 def test_runtime_config_accepts_adaptive_reset_profile() -> None:
@@ -26,14 +41,16 @@ def test_runtime_config_accepts_adaptive_reset_profile() -> None:
         silence_min_seconds=4.0,
         silence_max_seconds=8.0,
         silence_pad_frames=12,
-        text_temperature=0.2,
+        sampling_profile="greedy",
+        sampling_seed=123,
     )
 
     assert config.silence_mode == "adaptive-reset"
     assert config.silence_min_seconds == 4.0
     assert config.silence_max_seconds == 8.0
     assert config.silence_pad_frames == 12
-    assert config.text_temperature == 0.2
+    assert config.sampling_profile == "greedy"
+    assert config.sampling_seed == 123
 
 
 def test_runtime_config_rejects_unknown_codec() -> None:
@@ -44,6 +61,18 @@ def test_runtime_config_rejects_unknown_codec() -> None:
 def test_runtime_config_rejects_unknown_silence_mode() -> None:
     with pytest.raises(ValueError, match="silence_mode"):
         RuntimeConfig(silence_mode="magic")
+
+
+def test_runtime_config_rejects_unknown_sampling_profile() -> None:
+    with pytest.raises(ValueError, match="sampling_profile"):
+        RuntimeConfig(sampling_profile="magic")
+
+
+def test_runtime_config_rejects_invalid_sampling_seed() -> None:
+    with pytest.raises(ValueError, match="sampling_seed"):
+        RuntimeConfig(sampling_seed=-1)
+    with pytest.raises(ValueError, match="sampling_seed"):
+        RuntimeConfig(sampling_seed=0x1_0000_0000)
 
 
 def test_runtime_config_rejects_tiny_queue() -> None:
