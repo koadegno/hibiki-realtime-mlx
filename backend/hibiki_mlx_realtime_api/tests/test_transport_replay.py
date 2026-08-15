@@ -49,11 +49,10 @@ def test_stage1b_opus_is_preencoded_then_pages_are_paced_to_the_websocket() -> N
     script = (STATIC_DIR / "transport-replay.js").read_text()
 
     assert "async function preencodeOfficialOpus" in script
+    assert "async function sendPreencodedOpus" in script
     assert "audioPages" in script
     assert "headerPages" in script
     assert "OPUS_PAGE_INTERVAL_MS" in script
-    assert "await preencodeOfficialOpus" in script
-    assert "await sendPreencodedOpus" in script
 
     preencode_start = script.index("async function preencodeOfficialOpus")
     preencode_end = script.index("async function sendPreencodedOpus")
@@ -62,3 +61,8 @@ def test_stage1b_opus_is_preencoded_then_pages_are_paced_to_the_websocket() -> N
     # The encoder worker may produce pages in bursts. It must never write those
     # pages straight to the websocket; replay pacing owns all websocket sends.
     assert "ws.send(" not in preencode_body
+
+    run_start = script.index("async function runTransport")
+    run_body = script[run_start:]
+    assert run_body.index("preencodeOfficialOpus(") < run_body.index("openWebSocket(")
+    assert "sendPreencodedOpus(" in run_body
