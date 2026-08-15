@@ -175,10 +175,14 @@
     validateTailSeconds(tailSeconds);
     const source = pcm16ToFloat32(input);
     const frames = [];
+    const paddedSourceSamples =
+      Math.ceil(source.length / PCM_FRAME_SAMPLES) * PCM_FRAME_SAMPLES;
 
-    for (let offset = 0; offset < source.length; offset += OPUS_FRAME_SAMPLES) {
+    for (let offset = 0; offset < paddedSourceSamples; offset += OPUS_FRAME_SAMPLES) {
       const frame = new Float32Array(OPUS_FRAME_SAMPLES);
-      frame.set(source.subarray(offset, Math.min(offset + OPUS_FRAME_SAMPLES, source.length)));
+      if (offset < source.length) {
+        frame.set(source.subarray(offset, Math.min(offset + OPUS_FRAME_SAMPLES, source.length)));
+      }
       frames.push(frame);
     }
 
