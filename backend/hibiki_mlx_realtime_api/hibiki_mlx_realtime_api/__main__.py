@@ -66,10 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Consecutive translated text PAD frames required by adaptive-reset.",
     )
     parser.add_argument(
-        "--text-temperature",
-        type=float,
-        default=defaults.text_temperature,
-        help="Hibiki text sampling temperature; reference MLX default is 0.4.",
+        "--sampling-profile",
+        choices=("mlx-current", "kyutai-reference", "greedy", "historical-cold-0.2"),
+        default=defaults.sampling_profile,
+        help="Named text-sampling profile used by every realtime session.",
+    )
+    parser.add_argument(
+        "--sampling-seed",
+        type=int,
+        default=defaults.sampling_seed,
+        help="MLX random seed applied once at the start of every fresh websocket session.",
     )
     return parser
 
@@ -91,7 +97,8 @@ def config_from_args(args: argparse.Namespace) -> RuntimeConfig:
         silence_min_seconds=args.silence_min_seconds,
         silence_max_seconds=args.silence_max_seconds,
         silence_pad_frames=args.silence_pad_frames,
-        text_temperature=args.text_temperature,
+        sampling_profile=args.sampling_profile,
+        sampling_seed=args.sampling_seed,
     )
 
 
