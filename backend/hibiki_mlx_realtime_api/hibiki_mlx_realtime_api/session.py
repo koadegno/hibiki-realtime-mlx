@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from hibiki_mlx_realtime_api.codecs import FRAME_SAMPLES, CodecExecution, CodecPair
-from hibiki_mlx_realtime_api.config import SilenceMode
+from hibiki_mlx_realtime_api.config import SamplingProfile, SilenceMode
 
 _LOGGER = logging.getLogger(__name__)
 _FRAME_BUDGET_MS = 80.0
@@ -141,7 +141,8 @@ class RealtimeSession:
         silence_min_seconds: float = 4.0,
         silence_max_seconds: float = 8.0,
         silence_pad_frames: int = 12,
-        text_temperature: float = 0.4,
+        sampling_profile: SamplingProfile = "mlx-current",
+        sampling_seed: int = 299792458,
     ) -> None:
         if queue_capacity < 2:
             raise ValueError("queue_capacity must be >= 2")
@@ -157,8 +158,8 @@ class RealtimeSession:
             raise ValueError("silence_max_seconds must be >= silence_min_seconds")
         if silence_pad_frames <= 0:
             raise ValueError("silence_pad_frames must be > 0")
-        if text_temperature < 0:
-            raise ValueError("text_temperature must be >= 0")
+        if not 0 <= sampling_seed <= 0xFFFFFFFF:
+            raise ValueError("sampling_seed must be in 0..4294967295")
 
         self._loaded_model = loaded_model
         self._codecs = codecs
@@ -170,7 +171,8 @@ class RealtimeSession:
         self._silence_min_frames = max(1, int(round(silence_min_seconds * _FRAME_RATE)))
         self._silence_max_frames = max(1, int(round(silence_max_seconds * _FRAME_RATE)))
         self._silence_pad_frames = silence_pad_frames
-        self._text_temperature = text_temperature
+        self._sampling_profile = sampling_profile
+        self._sampling_seed = sampling_seed
 
         self._input_q: queue.Queue[_InputFrame] = queue.Queue(maxsize=queue_capacity)
         self._encoded_q: queue.Queue[_EncodedFrame] = queue.Queue(maxsize=queue_capacity)
@@ -281,12 +283,13 @@ class RealtimeSession:
     def _new_generator(self) -> Any:
         return self._loaded_model.new_generator(
             max_steps=self._max_steps,
-            text_temperature=self._text_temperature,
+            sampling_profile=self._sampling_profile,
         )
 
     def _prepare_model_state(self) -> None:
         """Create all session-local MLX state on the thread that will execute the LM."""
         self._loaded_model.reset_state()
+        self._loaded_model.seed_sampling(self._sampling_seed)
         self._generator = self._new_generator()
 
     def _reset_generation(self) -> None:
@@ -298,9 +301,8 @@ class RealtimeSession:
 
     def _serial_mlx_loop(self) -> None:
         """Run Mimi encode, Hibiki LM and Mimi decode on one Metal submission thread."""
-        self._loaded_model.reset_state()
+        self._prepare_model_state()
         self._codecs.reset()
-        self._generator = self._new_generator()
         mx = self._loaded_model.modules.mx
 
         while not self._stop.is_set():
