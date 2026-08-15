@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments
+.env
+.venv/
+venv/
+
+# Editors
+.vscode/
+.idea/
+*~
+
+# Models and local recordings
+*.safetensors
+*.wav
+*.flac
+*.mp3
+*.ogg
+*.pem
+*.tgz
+
+# Quality experiment outputs
+backend/hibiki_mlx_realtime_api/quality-runs/
+
+# Keep the service lockfile committed
+uv.lock
+!backend/hibiki_mlx_realtime_api/uv.lock

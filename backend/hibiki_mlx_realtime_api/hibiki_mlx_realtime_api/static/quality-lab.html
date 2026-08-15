@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hibiki-Zero PCM Quality Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111;
+      --panel: #1b1b1b;
+      --text: #c7cbd3;
+      --green: #39f2ae;
+      --red: #ff5b4d;
+      --muted: #7e8490;
+      --border: #3b3f47;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 980px; margin: 0 auto; padding: 44px 24px 80px; }
+    h1 { margin: 0 0 8px; color: var(--green); font-size: clamp(42px, 7vw, 72px); font-weight: 500; }
+    h2 { margin-top: 34px; font-weight: 500; }
+    p { line-height: 1.55; }
+    .tag {
+      display: inline-block;
+      border: 1px dashed var(--green);
+      color: var(--green);
+      padding: 8px 12px;
+      margin: 8px 8px 8px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 26px 0; }
+    button, a.button {
+      border: 1px dashed var(--green);
+      color: var(--green);
+      background: transparent;
+      padding: 12px 18px;
+      font: inherit;
+      font-size: 18px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .35; cursor: not-allowed; }
+    .danger { border-color: var(--red); color: var(--red); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .metric { background: var(--panel); border: 1px solid var(--border); padding: 14px; min-height: 78px; }
+    .metric .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .metric .value { margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; word-break: break-word; }
+    #error { color: var(--red); white-space: pre-wrap; min-height: 1.4em; }
+    #transcript {
+      min-height: 160px;
+      padding: 18px;
+      background: #333;
+      color: #d7dbe2;
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 19px;
+    }
+    .challenge { background: var(--panel); border-left: 3px solid var(--green); padding: 14px 18px; }
+    .challenge li { margin: 8px 0; }
+    .note { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Hibiki-Zero Quality Lab</h1>
+  <p>
+    Lossless input reference for Stage 1 of the quality roadmap. This page bypasses the
+    browser Opus encoder and sends <strong>RAW PCM16LE</strong> directly to the server.
+    Hibiki, Mimi, the silence policy, translated-audio output, and the websocket session are unchanged.
+  </p>
+
+  <div>
+    <span class="tag">INPUT: RAW PCM16LE</span>
+    <span class="tag">MONO 24 kHz</span>
+    <span class="tag">1920 samples / 80 ms</span>
+  </div>
+
+  <div class="controls">
+    <button id="start">Start PCM test</button>
+    <button id="stop" class="danger" disabled>Stop</button>
+    <button id="download" disabled>Download source WAV</button>
+    <a class="button" href="/" target="_blank" rel="noreferrer">Open Opus baseline</a>
+  </div>
+
+  <div id="error"></div>
+
+  <div class="grid">
+    <div class="metric"><div class="label">Transport</div><div id="transport" class="value">RAW PCM16LE</div></div>
+    <div class="metric"><div class="label">Requested sample rate</div><div class="value">24000 Hz</div></div>
+    <div class="metric"><div class="label">Actual AudioContext</div><div id="sampleRate" class="value">not started</div></div>
+    <div class="metric"><div class="label">WebSocket</div><div id="wsState" class="value">closed</div></div>
+    <div class="metric"><div class="label">Input frames sent</div><div id="inputFrames" class="value">0</div></div>
+    <div class="metric"><div class="label">Translated audio packets</div><div id="outputFrames" class="value">0</div></div>
+  </div>
+
+  <h2>Challenge phrases</h2>
+  <p class="note">Use the same phrases on this page and on the Opus baseline. Do not intentionally over-articulate.</p>
+  <ol class="challenge">
+    <li>La jeune fille arrive demain.</li>
+    <li>Le jeune fils arrive demain.</li>
+    <li>La fille a six livres.</li>
+    <li>Le fils a dix livres.</li>
+    <li>Elle a cinq cents euros.</li>
+  </ol>
+
+  <h2>Translated text</h2>
+  <div id="transcript"></div>
+</main>
+<script src="/quality-lab.js"></script>
+</body>
+</html>

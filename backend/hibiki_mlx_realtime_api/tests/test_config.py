@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import pytest
+
+from hibiki_mlx_realtime_api.config import RuntimeConfig
+
+
+def test_runtime_config_defaults_to_mlx_codec() -> None:
+    config = RuntimeConfig()
+
+    assert config.host == "127.0.0.1"
+    assert config.port == 8998
+    assert config.codec == "mlx"
+    assert config.model_repo == "huybik/hibiki-zero-3b-mlx-q4"
+    assert config.queue_capacity == 16
+    assert config.telemetry_interval_frames == 125
+    assert config.silence_mode == "none"
+    assert config.text_temperature == 0.4
+
+
+def test_runtime_config_accepts_adaptive_reset_profile() -> None:
+    config = RuntimeConfig(
+        silence_mode="adaptive-reset",
+        silence_rms_threshold=0.002,
+        speech_rms_threshold=0.006,
+        silence_min_seconds=4.0,
+        silence_max_seconds=8.0,
+        silence_pad_frames=12,
+        text_temperature=0.2,
+    )
+
+    assert config.silence_mode == "adaptive-reset"
+    assert config.silence_min_seconds == 4.0
+    assert config.silence_max_seconds == 8.0
+    assert config.silence_pad_frames == 12
+    assert config.text_temperature == 0.2
+
+
+def test_runtime_config_rejects_unknown_codec() -> None:
+    with pytest.raises(ValueError, match="codec"):
+        RuntimeConfig(codec="cuda")
+
+
+def test_runtime_config_rejects_unknown_silence_mode() -> None:
+    with pytest.raises(ValueError, match="silence_mode"):
+        RuntimeConfig(silence_mode="magic")
+
+
+def test_runtime_config_rejects_tiny_queue() -> None:
+    with pytest.raises(ValueError, match="queue_capacity"):
+        RuntimeConfig(queue_capacity=1)
+
+
+def test_runtime_config_rejects_overlapping_silence_hysteresis() -> None:
+    with pytest.raises(ValueError, match="speech_rms_threshold"):
+        RuntimeConfig(silence_rms_threshold=0.01, speech_rms_threshold=0.005)
+
+
+def test_runtime_config_rejects_invalid_silence_window() -> None:
+    with pytest.raises(ValueError, match="silence_max_seconds"):
+        RuntimeConfig(
+            silence_mode="adaptive-reset",
+            silence_min_seconds=9.0,
+            silence_max_seconds=8.0,
+        )

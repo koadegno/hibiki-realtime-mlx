@@ -1,0 +1,47 @@
+[project]
+name = "hibiki-mlx-realtime-api"
+version = "0.1.0"
+description = "Realtime Hibiki-Zero MLX translation API for Apple Silicon."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiohttp>=3.10.5,<3.12",
+    "huggingface-hub[hf-xet]>=0.24,<0.29",
+    "mlx>=0.26.0,<0.27",
+    "numpy>=2.1.0,<2.3",
+    "rustymimi==0.4.1",
+    "sentencepiece==0.2",
+    "sphn>=0.2.0,<0.3.0",
+    "moshi_mlx @ git+https://github.com/huybik/hibiki-zero-mlx.git@888946ec1bdaa1decc123ce6d39a2ecddf0ae032#subdirectory=moshi-mlx",
+]
+
+[project.scripts]
+hibiki-mlx-realtime-api = "hibiki_mlx_realtime_api.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.25,<0.26",
+    "ruff>=0.9,<0.10",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["hibiki_mlx_realtime_api"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hibiki_mlx_realtime_api"]

@@ -1,0 +1,243 @@
+version: "3"
+
+silent: false
+
+vars:
+  HIBIKI_MLX_DIR: backend/hibiki_mlx_realtime_api
+
+tasks:
+  default:
+    desc: List available Hibiki MLX tasks.
+    cmds:
+      - task --list
+
+  hibiki-mlx:lock:
+    desc: Regenerate the Hibiki MLX API uv lockfile.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - uv lock --python 3.12
+
+  hibiki-mlx:sync:
+    desc: Install the locked Hibiki MLX runtime with Python 3.12.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - uv sync --locked --group dev --python 3.12
+
+  hibiki-mlx:lint:
+    desc: Run Ruff against the Hibiki MLX realtime API.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - uv run --locked --group dev ruff check .
+
+  hibiki-mlx:test:
+    desc: Run Hibiki MLX unit tests without model downloads.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    env:
+      HF_HUB_OFFLINE: "1"
+    cmds:
+      - uv run --locked --group dev pytest tests -v
+
+  hibiki-mlx:frontend-check:
+    desc: Verify that the official Hibiki frontend is vendored with the MLX service.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - >-
+        uv run --locked python -c
+        "from hibiki_mlx_realtime_api.__main__ import packaged_static_dir; p=packaged_static_dir(); print(p); assert (p / 'index.html').is_file()"
+
+  hibiki-mlx:cli-check:
+    desc: Verify the MLX CLI can display help without loading Metal or model weights.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - uv run --locked python -m hibiki_mlx_realtime_api --help
+      - uv run --locked python -m hibiki_mlx_realtime_api.replay --help
+
+  hibiki-mlx:check:
+    desc: Run all repository-level checks for the Hibiki MLX realtime API.
+    cmds:
+      - task: hibiki-mlx:lint
+      - task: hibiki-mlx:test
+      - task: hibiki-mlx:frontend-check
+      - task: hibiki-mlx:cli-check
+
+  hibiki-mlx:info:
+    desc: Verify MLX sees the Apple GPU and print pinned runtime information.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        uv run --locked python - <<'PY'
+        from importlib.metadata import version
+        import mlx.core as mx
+
+        from hibiki_mlx_realtime_api.config import RuntimeConfig
+
+        config = RuntimeConfig()
+        mx.set_default_device(mx.gpu)
+        x = mx.ones((1024, 1024))
+        y = x @ x
+        mx.eval(y)
+        print("MLX:", version("mlx"))
+        print("moshi_mlx:", version("moshi_mlx"))
+        print("rustymimi:", version("rustymimi"))
+        print("GPU compute shape:", y.shape)
+        print("Model repo:", config.model_repo)
+        print("Model revision:", config.model_revision)
+        print("Default codec:", config.codec)
+        print("MLX GPU compute: OK")
+        PY
+
+  hibiki-mlx:serve:
+    desc: Start the all-MLX benchmark path.
+    cmds:
+      - task: hibiki-mlx:serve:mlx
+
+  hibiki-mlx:serve:mlx:
+    desc: Start Hibiki with LM and Mimi through MLX/Metal.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec mlx
+
+  hibiki-mlx:serve:rust:
+    desc: Start the proven pipelined Rust Mimi + MLX LM baseline with no silence intervention.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec rust \
+          --silence-mode none
+
+  hibiki-mlx:serve:rust:baseline:
+    desc: Explicit alias for the proven Rust Mimi + MLX LM baseline.
+    cmds:
+      - task: hibiki-mlx:serve:rust
+
+  hibiki-mlx:serve:rust:hold:
+    desc: After long silence, freeze Hibiki but keep the browser clock alive; resume the same LM state.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec rust \
+          --silence-mode hold \
+          --silence-rms-threshold "${HIBIKI_SILENCE_RMS_THRESHOLD:-0.002}" \
+          --speech-rms-threshold "${HIBIKI_SPEECH_RMS_THRESHOLD:-0.006}" \
+          --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
+          --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
+          --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
+          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+
+  hibiki-mlx:serve:rust:reset:
+    desc: Experimental reset policy retained for reproducibility; currently rejected by the experiment journal.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec rust \
+          --silence-mode reset \
+          --silence-rms-threshold "${HIBIKI_SILENCE_RMS_THRESHOLD:-0.002}" \
+          --speech-rms-threshold "${HIBIKI_SPEECH_RMS_THRESHOLD:-0.006}" \
+          --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
+          --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
+          --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
+          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+
+  hibiki-mlx:serve:rust:adaptive-reset:
+    desc: Reference-inspired translated-tail policy retained as a quality-roadmap candidate.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec rust \
+          --silence-mode adaptive-reset \
+          --silence-rms-threshold "${HIBIKI_SILENCE_RMS_THRESHOLD:-0.002}" \
+          --speech-rms-threshold "${HIBIKI_SPEECH_RMS_THRESHOLD:-0.006}" \
+          --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
+          --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
+          --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
+          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+
+  hibiki-mlx:serve:rust:adaptive-reset-cold:
+    desc: Historical colder-sampling experiment retained for reproducibility; currently rejected.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        exec uv run --locked hibiki-mlx-realtime-api \
+          --host "$HOST" \
+          --port "$PORT" \
+          --codec rust \
+          --silence-mode adaptive-reset \
+          --silence-rms-threshold "${HIBIKI_SILENCE_RMS_THRESHOLD:-0.002}" \
+          --speech-rms-threshold "${HIBIKI_SPEECH_RMS_THRESHOLD:-0.006}" \
+          --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
+          --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
+          --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
+          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.2}"
+
+  hibiki-mlx:replay:
+    desc: Replay an exact quality-lab WAV through raw PCM and save transcript, translated WAV, and manifest.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - |
+        if [ -z "${HIBIKI_REPLAY_WAV:-}" ]; then
+          echo "Set HIBIKI_REPLAY_WAV=/absolute/path/to/hibiki-quality-source.wav" >&2
+          exit 2
+        fi
+        LABEL="${HIBIKI_REPLAY_LABEL:-adaptive-reset-pcm}"
+        STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+        OUT="${HIBIKI_REPLAY_OUTPUT_DIR:-quality-runs/${STAMP}-${LABEL}}"
+        URL="${HIBIKI_REPLAY_URL:-ws://127.0.0.1:8998/api/chat}"
+        exec uv run --locked python -m hibiki_mlx_realtime_api.replay \
+          "$HIBIKI_REPLAY_WAV" \
+          --output-dir "$OUT" \
+          --url "$URL" \
+          --label "$LABEL" \
+          --tail-seconds "${HIBIKI_REPLAY_TAIL_SECONDS:-6}" \
+          --settle-seconds "${HIBIKI_REPLAY_SETTLE_SECONDS:-1}"
+
+  hibiki-mlx:health:
+    desc: Query Hibiki MLX API liveness.
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        curl --fail --silent --show-error "http://${HOST}:${PORT}/health"
+        printf '\n'
+
+  hibiki-mlx:ready:
+    desc: Query Hibiki MLX model/codec readiness.
+    cmds:
+      - |
+        HOST="${HIBIKI_HOST:-127.0.0.1}"
+        PORT="${HIBIKI_PORT:-8998}"
+        curl --fail-with-body --silent --show-error "http://${HOST}:${PORT}/ready"
+        printf '\n'
+
+  hibiki-mlx:clean:
+    desc: Remove only the MLX service virtualenv and test caches; keep downloaded model weights.
+    dir: "{{.HIBIKI_MLX_DIR}}"
+    cmds:
+      - rm -rf .venv .pytest_cache .ruff_cache
