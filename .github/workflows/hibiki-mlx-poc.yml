@@ -1,0 +1,65 @@
+name: Hibiki MLX POC
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.12"
+      - name: Verify lockfile
+        working-directory: backend/hibiki_mlx_realtime_api
+        run: uv lock --check --python 3.12
+      - name: Create test environment
+        working-directory: backend/hibiki_mlx_realtime_api
+        run: |
+          uv venv --python 3.12
+          uv pip install --no-deps -e .
+          uv pip install \
+            "aiohttp>=3.10.5,<3.12" \
+            "numpy>=2.1,<2.3" \
+            "pytest>=8.3,<9" \
+            "pytest-asyncio>=0.25,<0.26" \
+            "ruff>=0.9,<0.10"
+      - name: Ruff
+        working-directory: backend/hibiki_mlx_realtime_api
+        run: uv run --no-sync ruff check .
+      - name: Tests
+        working-directory: backend/hibiki_mlx_realtime_api
+        env:
+          HF_HUB_OFFLINE: "1"
+        run: uv run --no-sync pytest tests -q
+      - name: Browser JavaScript syntax
+        working-directory: backend/hibiki_mlx_realtime_api
+        run: |
+          node --check hibiki_mlx_realtime_api/static/quality-lab.js
+          node --check hibiki_mlx_realtime_api/static/quality-input-processor.js
+      - name: CLI smoke
+        working-directory: backend/hibiki_mlx_realtime_api
+        run: |
+          uv run --no-sync python -m hibiki_mlx_realtime_api --help
+          uv run --no-sync python -m hibiki_mlx_realtime_api.replay --help
+      - name: Parse Taskfile with Go Task
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/go-task/task/releases/download/v3.52.0/task_linux_amd64.tar.gz \
+            | tar -xz -C /tmp task
+          /tmp/task --list-all > /tmp/tasks.txt
+          cat /tmp/tasks.txt
+          grep -F "hibiki-mlx:serve:mlx" /tmp/tasks.txt
+          grep -F "hibiki-mlx:serve:rust" /tmp/tasks.txt
+          grep -F "hibiki-mlx:check" /tmp/tasks.txt
+          grep -F "hibiki-mlx:replay" /tmp/tasks.txt
