@@ -69,9 +69,10 @@ tasks:
         from importlib.metadata import version
         import mlx.core as mx
 
-        from hibiki_mlx_realtime_api.config import RuntimeConfig
+        from hibiki_mlx_realtime_api.config import RuntimeConfig, resolve_sampling_profile
 
         config = RuntimeConfig()
+        sampling = resolve_sampling_profile(config.sampling_profile)
         mx.set_default_device(mx.gpu)
         x = mx.ones((1024, 1024))
         y = x @ x
@@ -83,6 +84,10 @@ tasks:
         print("Model repo:", config.model_repo)
         print("Model revision:", config.model_revision)
         print("Default codec:", config.codec)
+        print("Default sampling profile:", config.sampling_profile)
+        print("Default sampling seed:", config.sampling_seed)
+        print("Default text sampler:", sampling.text_temperature, sampling.text_top_k)
+        print("Default audio sampler:", sampling.audio_temperature, sampling.audio_top_k)
         print("MLX GPU compute: OK")
         PY
 
@@ -101,7 +106,9 @@ tasks:
         exec uv run --locked hibiki-mlx-realtime-api \
           --host "$HOST" \
           --port "$PORT" \
-          --codec mlx
+          --codec mlx \
+          --sampling-profile "${HIBIKI_SAMPLING_PROFILE:-mlx-current}" \
+          --sampling-seed "${HIBIKI_SAMPLING_SEED:-299792458}"
 
   hibiki-mlx:serve:rust:
     desc: Start the proven pipelined Rust Mimi + MLX LM baseline with no silence intervention.
@@ -114,7 +121,9 @@ tasks:
           --host "$HOST" \
           --port "$PORT" \
           --codec rust \
-          --silence-mode none
+          --silence-mode none \
+          --sampling-profile "${HIBIKI_SAMPLING_PROFILE:-mlx-current}" \
+          --sampling-seed "${HIBIKI_SAMPLING_SEED:-299792458}"
 
   hibiki-mlx:serve:rust:baseline:
     desc: Explicit alias for the proven Rust Mimi + MLX LM baseline.
@@ -138,7 +147,8 @@ tasks:
           --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
           --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
           --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
-          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+          --sampling-profile "${HIBIKI_SAMPLING_PROFILE:-mlx-current}" \
+          --sampling-seed "${HIBIKI_SAMPLING_SEED:-299792458}"
 
   hibiki-mlx:serve:rust:reset:
     desc: Experimental reset policy retained for reproducibility; currently rejected by the experiment journal.
@@ -157,10 +167,11 @@ tasks:
           --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
           --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
           --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
-          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+          --sampling-profile "${HIBIKI_SAMPLING_PROFILE:-mlx-current}" \
+          --sampling-seed "${HIBIKI_SAMPLING_SEED:-299792458}"
 
   hibiki-mlx:serve:rust:adaptive-reset:
-    desc: Reference-inspired translated-tail policy retained as a quality-roadmap candidate.
+    desc: Reference-inspired translated-tail policy and Stage 2 sampling entrypoint.
     dir: "{{.HIBIKI_MLX_DIR}}"
     cmds:
       - |
@@ -176,26 +187,28 @@ tasks:
           --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
           --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
           --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
-          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.4}"
+          --sampling-profile "${HIBIKI_SAMPLING_PROFILE:-mlx-current}" \
+          --sampling-seed "${HIBIKI_SAMPLING_SEED:-299792458}"
+
+  hibiki-mlx:serve:rust:adaptive-reset:mlx-current:
+    desc: Stage 2 current MLX-port text sampler (temperature 0.4, top-k 25).
+    cmds:
+      - HIBIKI_SAMPLING_PROFILE=mlx-current task hibiki-mlx:serve:rust:adaptive-reset
+
+  hibiki-mlx:serve:rust:adaptive-reset:kyutai-reference:
+    desc: Stage 2 Kyutai-reference-like text sampler (temperature 0.8, top-k 250).
+    cmds:
+      - HIBIKI_SAMPLING_PROFILE=kyutai-reference task hibiki-mlx:serve:rust:adaptive-reset
+
+  hibiki-mlx:serve:rust:adaptive-reset:greedy:
+    desc: Stage 2 deterministic text argmax sampler (temperature 0.0).
+    cmds:
+      - HIBIKI_SAMPLING_PROFILE=greedy task hibiki-mlx:serve:rust:adaptive-reset
 
   hibiki-mlx:serve:rust:adaptive-reset-cold:
     desc: Historical colder-sampling experiment retained for reproducibility; currently rejected.
-    dir: "{{.HIBIKI_MLX_DIR}}"
     cmds:
-      - |
-        HOST="${HIBIKI_HOST:-127.0.0.1}"
-        PORT="${HIBIKI_PORT:-8998}"
-        exec uv run --locked hibiki-mlx-realtime-api \
-          --host "$HOST" \
-          --port "$PORT" \
-          --codec rust \
-          --silence-mode adaptive-reset \
-          --silence-rms-threshold "${HIBIKI_SILENCE_RMS_THRESHOLD:-0.002}" \
-          --speech-rms-threshold "${HIBIKI_SPEECH_RMS_THRESHOLD:-0.006}" \
-          --silence-min-seconds "${HIBIKI_SILENCE_MIN_SECONDS:-4}" \
-          --silence-max-seconds "${HIBIKI_SILENCE_MAX_SECONDS:-8}" \
-          --silence-pad-frames "${HIBIKI_SILENCE_PAD_FRAMES:-12}" \
-          --text-temperature "${HIBIKI_TEXT_TEMPERATURE:-0.2}"
+      - HIBIKI_SAMPLING_PROFILE=historical-cold-0.2 task hibiki-mlx:serve:rust:adaptive-reset
 
   hibiki-mlx:replay:
     desc: Replay an exact quality-lab WAV through raw PCM and save transcript, translated WAV, and manifest.
@@ -228,7 +241,7 @@ tasks:
         printf '\n'
 
   hibiki-mlx:ready:
-    desc: Query Hibiki MLX model/codec readiness.
+    desc: Query Hibiki MLX model/codec readiness and active Stage 2 sampling identity.
     cmds:
       - |
         HOST="${HIBIKI_HOST:-127.0.0.1}"
