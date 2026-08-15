@@ -112,8 +112,9 @@ test("createOpusFrames uses exact 20 ms framing and int16/32768 conversion", () 
   assert.ok(frames[3].every((value) => value === 0));
 });
 
-test("official encoder configuration exactly matches the bundled frontend", () => {
+test("official encoder configuration exactly matches the resolved 24 kHz frontend worker config", () => {
   assert.deepEqual(core.OFFICIAL_ENCODER_CONFIG, {
+    bufferLength: 960,
     encoderSampleRate: 24000,
     encoderFrameSize: 20,
     maxFramesPerPage: 2,
@@ -123,6 +124,7 @@ test("official encoder configuration exactly matches the bundled frontend", () =
     encoderComplexity: 0,
     encoderApplication: 2049,
     streamPages: true,
+    wavBitDepth: 16,
     originalSampleRate: 24000,
     wavSampleRate: 24000,
   });
