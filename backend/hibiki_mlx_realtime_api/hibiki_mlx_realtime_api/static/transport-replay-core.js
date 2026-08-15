@@ -17,6 +17,7 @@
   const OPUS_FRAME_SECONDS = OPUS_FRAME_SAMPLES / SAMPLE_RATE;
 
   const OFFICIAL_ENCODER_CONFIG = Object.freeze({
+    bufferLength: 960,
     encoderSampleRate: 24000,
     encoderFrameSize: 20,
     maxFramesPerPage: 2,
@@ -26,6 +27,7 @@
     encoderComplexity: 0,
     encoderApplication: 2049,
     streamPages: true,
+    wavBitDepth: 16,
     originalSampleRate: 24000,
     wavSampleRate: 24000,
   });
