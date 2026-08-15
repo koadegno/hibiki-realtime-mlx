@@ -84,7 +84,8 @@ class FakeLoadedModel:
         self._generator_tokens = list(generator_tokens or [[42]])
         self._generator_audio_delays = list(generator_audio_delays or [0])
         self.generators: list[FakeGenerator] = []
-        self.generator_temperatures: list[float] = []
+        self.sampling_profiles: list[str] = []
+        self.sampling_seeds: list[int] = []
         self.condition = "condition"
         self.tokenizer = SimpleNamespace(
             id_to_piece=lambda token: "</s>" if token == 2 else "▁hello"
@@ -99,7 +100,15 @@ class FakeLoadedModel:
     def reset_state(self) -> None:
         self.reset_calls += 1
 
-    def new_generator(self, *, max_steps: int, text_temperature: float = 0.4) -> FakeGenerator:
+    def seed_sampling(self, seed: int) -> None:
+        self.sampling_seeds.append(seed)
+
+    def new_generator(
+        self,
+        *,
+        max_steps: int,
+        sampling_profile: str = "mlx-current",
+    ) -> FakeGenerator:
         assert max_steps == 100
         tokens = self._generator_tokens.pop(0) if self._generator_tokens else [42]
         audio_delay = self._generator_audio_delays.pop(0) if self._generator_audio_delays else 0
@@ -108,7 +117,7 @@ class FakeLoadedModel:
             tokens=tokens,
             audio_delay_frames=audio_delay,
         )
-        self.generator_temperatures.append(text_temperature)
+        self.sampling_profiles.append(sampling_profile)
         self.generators.append(generator)
         return generator
 
@@ -169,6 +178,8 @@ def test_session_streams_text_and_audio_through_bounded_pipeline() -> None:
         session.close()
 
     assert loaded.reset_calls == 1
+    assert loaded.sampling_seeds == [299792458]
+    assert loaded.sampling_profiles == ["mlx-current"]
     assert encoder.reset_calls == 1
     assert decoder.reset_calls == 1
     assert any(isinstance(event, TextEvent) and event.text == " hello" for event in events)
@@ -180,8 +191,9 @@ def test_session_streams_text_and_audio_through_bounded_pipeline() -> None:
 
 def test_all_mlx_session_runs_encode_lm_decode_on_one_metal_thread() -> None:
     thread_names: list[str] = []
+    loaded = FakeLoadedModel(thread_names)
     session = RealtimeSession(
-        loaded_model=FakeLoadedModel(thread_names),
+        loaded_model=loaded,
         codecs=CodecPair(
             encoder=FakeCodec(thread_names),
             decoder=FakeCodec(thread_names),
@@ -200,6 +212,7 @@ def test_all_mlx_session_runs_encode_lm_decode_on_one_metal_thread() -> None:
         session.close()
 
     assert len(events) == 2
+    assert loaded.sampling_seeds == [299792458]
     assert thread_names == ["hibiki-mlx-serial"] * 3
     assert len(session.metrics.total_ms) == 1
 
@@ -391,6 +404,8 @@ def test_reset_mode_starts_fresh_generation_on_resume_without_stopping_audio_clo
 
     assert [len(generator.steps) for generator in loaded.generators] == [3, 1]
     assert loaded.reset_calls == 2
+    assert loaded.sampling_seeds == [299792458]
+    assert loaded.sampling_profiles == ["mlx-current", "mlx-current"]
     assert encoder.reset_calls == 1
     assert decoder.reset_calls == 2
     audio = _audio_events(events)
@@ -442,6 +457,8 @@ def test_adaptive_reset_parks_after_reference_style_pad_run() -> None:
         session.close()
 
     assert [len(generator.steps) for generator in loaded.generators] == [3, 1]
+    assert loaded.sampling_seeds == [299792458]
+    assert loaded.sampling_profiles == ["mlx-current", "mlx-current"]
     assert len(_audio_events(events)) == len(frames)
     assert session.metrics.parks == 1
     assert session.metrics.resets == 1
