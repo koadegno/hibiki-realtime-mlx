@@ -37,7 +37,7 @@ class RuntimeSnapshot:
 
 
 class RuntimeManager:
-    """Load one MLX model and one codec pair, then create fresh sessions."""
+    """Load one MLX model and prepare isolated codec state for fresh sessions."""
 
     def __init__(
         self,
@@ -58,6 +58,7 @@ class RuntimeManager:
         self._files: Any = None
         self._loaded_model: Any = None
         self._codecs: Any = None
+        self._codec_kwargs: dict[str, Any] | None = None
         self._load_task: asyncio.Task[None] | None = None
 
     @property
@@ -86,18 +87,26 @@ class RuntimeManager:
                 int(lm_config.generated_codebooks),
             )
             checkpoint_codebooks = int(lm_config.audio_codebooks)
+            codec_kwargs = {
+                "mimi_path": files.mimi,
+                "num_codebooks": num_codebooks,
+                "checkpoint_codebooks": checkpoint_codebooks,
+            }
             codecs = await asyncio.to_thread(
                 self._codec_factory,
                 self.config.codec,
-                mimi_path=files.mimi,
-                num_codebooks=num_codebooks,
-                checkpoint_codebooks=checkpoint_codebooks,
+                **codec_kwargs,
             )
             await asyncio.to_thread(codecs.warmup)
 
             self._files = files
             self._loaded_model = loaded_model
-            self._codecs = codecs
+            self._codec_kwargs = codec_kwargs
+            # rustymimi 0.4.1 does not completely reset all streaming position/state.
+            # Keep its startup pair only as a readiness warmup and create fresh
+            # encoder/decoder tokenizers for every WebSocket session. The MLX Mimi
+            # reset path is complete, so retaining that pair avoids reloading it.
+            self._codecs = None if self.config.codec == "rust" else codecs
             self._error = None
             self._phase = RuntimePhase.READY
         except Exception as exc:  # lifecycle boundary converts load failure into readiness state
@@ -111,13 +120,25 @@ class RuntimeManager:
         return self._load_task
 
     def create_session(self) -> Any:
-        """Create session state without reloading the model or Mimi weights."""
+        """Create session state without reloading the language model."""
         if self._phase is not RuntimePhase.READY:
             raise RuntimeError(f"runtime is not ready: {self._phase.value}")
+        if self._codec_kwargs is None:
+            raise RuntimeError("runtime codec specification is unavailable")
+
+        codecs = self._codecs
+        if self.config.codec == "rust":
+            codecs = self._codec_factory(
+                self.config.codec,
+                **self._codec_kwargs,
+            )
+        if codecs is None:
+            raise RuntimeError("runtime codec state is unavailable")
+
         max_steps = int(self.config.max_session_minutes * 60.0 * _FRAME_RATE) + 8
         return self._session_factory(
             loaded_model=self._loaded_model,
-            codecs=self._codecs,
+            codecs=codecs,
             queue_capacity=self.config.queue_capacity,
             max_steps=max_steps,
             telemetry_interval_frames=self.config.telemetry_interval_frames,
