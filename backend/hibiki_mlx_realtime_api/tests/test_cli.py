@@ -9,7 +9,8 @@ def test_cli_defaults_to_pinned_mlx_runtime() -> None:
     assert config.model_revision == "7704e4f8e6fef6432abc95d73fb9d659df470eb9"
     assert config.queue_capacity == 16
     assert config.silence_mode == "none"
-    assert config.text_temperature == 0.4
+    assert config.sampling_profile == "mlx-current"
+    assert config.sampling_seed == 299792458
 
 
 def test_cli_allows_rust_codec_benchmark() -> None:
@@ -33,8 +34,10 @@ def test_cli_exposes_adaptive_silence_reset_controls() -> None:
                 "8",
                 "--silence-pad-frames",
                 "12",
-                "--text-temperature",
-                "0.2",
+                "--sampling-profile",
+                "greedy",
+                "--sampling-seed",
+                "123",
             ]
         )
     )
@@ -45,7 +48,8 @@ def test_cli_exposes_adaptive_silence_reset_controls() -> None:
     assert config.silence_min_seconds == 4.0
     assert config.silence_max_seconds == 8.0
     assert config.silence_pad_frames == 12
-    assert config.text_temperature == 0.2
+    assert config.sampling_profile == "greedy"
+    assert config.sampling_seed == 123
 
 
 def test_official_frontend_is_packaged_with_service() -> None:
