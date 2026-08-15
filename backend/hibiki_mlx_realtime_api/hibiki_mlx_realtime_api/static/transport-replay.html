@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hibiki Stage 1B Transport Replay</title>
+    <title>Hibiki deterministic quality replay</title>
     <style>
       :root {
         color-scheme: dark;
@@ -83,7 +83,7 @@
         margin: 0;
       }
       dt {
-        color: #9facA6;
+        color: #9faca6;
       }
       dd {
         margin: 0;
@@ -105,11 +105,11 @@
   </head>
   <body>
     <main>
-      <h1>Hibiki Stage 1B — deterministic transport replay</h1>
+      <h1>Hibiki quality — deterministic replay</h1>
       <p class="hint">
         Feed one exact 24 kHz mono PCM16 WAV through raw PCM or the bundled official Opus
-        encoder. Keep this tab active while a run is in progress. Each run creates a fresh
-        Hibiki websocket session.
+        encoder. Stage 2 quality comparisons use Raw PCM16LE only. Keep this tab active while a
+        run is in progress. Each run creates a fresh Hibiki websocket session.
       </p>
 
       <section class="panel">
@@ -132,7 +132,7 @@
           </label>
         </div>
         <div class="actions">
-          <button id="run" type="button" disabled>Run transport replay</button>
+          <button id="run" type="button" disabled>Run deterministic replay</button>
           <button id="cancel" type="button" disabled>Cancel</button>
         </div>
       </section>
@@ -146,6 +146,10 @@
           <dd id="sourceSamples">—</dd>
           <dt>Source duration</dt>
           <dd id="sourceDuration">—</dd>
+          <dt>Sampling profile</dt>
+          <dd id="samplingProfile">—</dd>
+          <dt>Sampling seed</dt>
+          <dd id="samplingSeed">—</dd>
           <dt>Canonical first corpus</dt>
           <dd><code>22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3</code></dd>
         </dl>
