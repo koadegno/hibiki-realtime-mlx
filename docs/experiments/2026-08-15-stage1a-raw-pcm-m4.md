@@ -2,7 +2,7 @@
 
 Date: 2026-08-15
 
-Status: **RAW PCM wins lexical-fidelity A/B; transport root cause not fully isolated yet.**
+Status: **RAW PCM won the tested live-chain lexical A/B; codec attribution remains unresolved.**
 
 ## Runtime
 
@@ -39,7 +39,7 @@ Opus
 server -> Rust Mimi -> Hibiki q4 MLX
 
 
-B - Stage 1A quality lab used in the first physical test
+B - Stage 1A quality lab
 
 mic
  |
@@ -56,38 +56,44 @@ PCM16LE, websocket kind 0x03
 server -> Rust Mimi -> Hibiki q4 MLX
 ```
 
-The comparison therefore proves a difference in the **current complete input chains**. It does not yet prove that Opus compression alone is responsible, because the official path also contains the opus-recorder resampling path.
+The comparison proves a difference in the **complete input chains that were physically tested**. It does not prove that Opus compression alone is responsible because the official path also contains device-rate capture/resampling and the two live tests did not use identical microphone-processing settings.
 
-A second input confound was found during post-test code review. The official frontend requests:
+## Correction to the microphone-preprocessing record
+
+A later review of the actual vendored official frontend showed that an earlier interpretation in this document was reversed.
+
+The embedded official frontend requests:
 
 ```text
 echoCancellation = true
-noiseSuppression = true
+noiseSuppression = false
 autoGainControl = true
 channelCount = 1
 ```
 
-The first quality-lab test accidentally used `noiseSuppression = false`. The lab has now been corrected to match all four official microphone constraints. The original physical result remains evidence that the tested raw-PCM chain was better, but the next controlled live comparison must use the corrected constraints before attributing the gain to transport/resampling.
+The Quality Lab used `noiseSuppression = true` during the latest relevant live test. It has now been corrected to `false` so future live checks match the actual bundled frontend.
+
+This correction does not erase the original observation that the tested raw-PCM chain sounded/transcribed better. It means that observation **must not be used as clean evidence that Opus itself caused the lexical difference**. Stage 1B therefore bypasses microphone acquisition entirely and starts from one exact saved WAV.
 
 ## User quality result
 
-The raw PCM path was judged **clearly better for translation and transcript fidelity**.
+The tested raw PCM path was judged **clearly better for translation and transcript fidelity** than the tested official browser chain.
 
-The downloaded quality-lab source WAV was also judged clear and clean when listened to directly, with no obvious source-audio defect.
+The downloaded Quality Lab source WAV was also judged clear and clean when listened to directly, with no obvious source-audio defect.
 
 Decision:
 
 ```text
 KEEP raw PCM as the canonical quality reference input.
-DO NOT yet conclude "Opus codec is the sole cause".
-RETEST with identical microphone preprocessing before Stage 1B attribution.
+DO NOT conclude "Opus codec is the sole cause" from the live A/B.
+USE deterministic same-WAV Stage 1B for transport attribution.
 ```
 
-## New translated-audio symptom
+## Translated-audio energy observation
 
-With the first quality-lab implementation, translated audio was audible but noticeably weaker, and the generated/playback voice sometimes sounded unusual. This had not been observed with the official frontend.
+During the first Quality Lab tests, translated audio was perceived as weaker and the generated/playback voice sometimes sounded unusual.
 
-A concrete playback confound was found after the test:
+A concrete playback confound was found after the first test:
 
 ```text
 official frontend output:
@@ -98,29 +104,20 @@ initial quality lab output:
   same forced 24 kHz AudioContext used for input and output
 ```
 
-The quality lab has now been changed to use two contexts:
+The Quality Lab was changed to use two contexts:
 
 ```text
 inputAudioContext  = AudioContext({sampleRate: 24000})
 outputAudioContext = AudioContext()  # native output rate
 ```
 
-Translated Opus playback now follows the same sample-rate strategy as the official frontend. This change still requires physical M4 validation; it is not yet accepted as the complete explanation of the weak/strange voice.
+The later deterministic translated WAV does **not** support a simple "Hibiki output amplitude became too low" explanation. The user also reports that the perceived energy drop disappears when speaking directly into the microphone and is mainly observed when source speech is played through external speakers and recaptured by the microphone.
 
-The deterministic replay harness also writes `translated.wav`, which will let us distinguish a browser playback problem from genuinely different target-audio tokens produced by Hibiki.
+External-speaker recapture, echo cancellation, AGC, room acoustics, and noise suppression are therefore still confounds. Do not modify the model or Mimi gain based on this symptom alone.
 
 ## Performance observation
 
-Representative official Opus-path telemetry from the preceding M4 run:
-
-```text
-RTF          ~= 0.247 - 0.307
-LM p50       ~= 19.6 - 20.5 ms
-LM p95       ~= 21.6 - 22.3 ms
-queues       ~= empty
-```
-
-Representative raw-PCM telemetry:
+An earlier raw-PCM live run had shown:
 
 ```text
 RTF          ~= 0.546 - 0.722
@@ -130,21 +127,30 @@ queues       ~= empty, occasional depth 1
 overloads    = 0
 ```
 
-The PCM path remains realtime, but this slowdown is too large to ignore because source transport was intended to be the only inference-side variable.
-
-The runtime telemetry has therefore been extended to report separate rolling percentiles for:
+That slowdown **did not reproduce** in the later long raw-PCM run with stage timing telemetry. Representative later values were:
 
 ```text
-Mimi encode p50/p95
-Hibiki LM p50/p95
-Mimi decode p50/p95
+RTF               ~= 0.25 - 0.27
+Mimi encode p50    ~= 20 ms
+Hibiki LM p50      ~= 20 ms
+Rust Mimi decode p50 ~= 18 ms
+queues             ~= 0/0/0
+overloads          = 0
 ```
 
-The next M4 run must use these stage timings before proposing a performance fix.
+The session also survived repeated adaptive-reset park/resume cycles without queue growth. Therefore raw PCM transport itself is no longer considered an intrinsic explanation for the earlier LM slowdown; the earlier performance anomaly remains recorded but is not reproduced.
 
-## Deterministic source replay
+## Deterministic source replay result
 
-The quality-lab WAV is now the canonical source specimen for follow-up experiments.
+The first Quality Lab WAV has now been captured and successfully replayed. It is the canonical source specimen for follow-up experiments.
+
+```text
+source format       24 kHz mono PCM16 WAV
+source duration     about 193.28 s
+source PCM SHA-256  22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
+```
+
+The deterministic raw replay pipeline is:
 
 ```text
 canonical 24 kHz PCM16 WAV
@@ -168,7 +174,34 @@ canonical 24 kHz PCM16 WAV
          manifest.json
 ```
 
-The replay records the SHA-256 of the exact PCM bytes and refuses stereo, non-24-kHz, compressed, or non-PCM16 input. The source input is deterministic; Hibiki output is not assumed deterministic yet while sampling remains stochastic.
+The replay records the SHA-256 of the exact PCM data bytes and refuses stereo, non-24-kHz, compressed, or non-PCM16 input. The source input is deterministic; Hibiki output is not assumed deterministic yet while sampling remains stochastic.
+
+The first replay correctly distinguished the initial challenge pair corresponding to `la jeune fille` and `le jeune fils`, while the longer corpus still contains lexical/semantic errors useful for later controlled experiments.
+
+## Stage 1B transport isolation
+
+Stage 1B tooling now reuses the **same saved WAV** for both transports:
+
+```text
+                  exact same source PCM
+                         |
+               +---------+---------+
+               |                   |
+               v                   v
+          raw 24 kHz          bundled official
+          kind 0x03            Opus worker
+                                   |
+                                kind 0x01
+               |                   |
+               +---------+---------+
+                         |
+                         v
+                 same Mimi + Hibiki
+```
+
+The Opus side uses the same bundled `encoderWorker.min.js` as the official frontend but receives an already-24-kHz source, so Stage 1B isolates codec/page-framing loss rather than device-rate resampling. Each transport gets a fresh websocket/session.
+
+Stage 1B is implemented and awaits the physical M4 same-WAV A/B before any transport-quality conclusion is made.
 
 ## Separate long-session issue discovered in the same test period
 
@@ -183,27 +216,15 @@ The Rust Mimi Python binding defaults `max_seq_len` to `8192`. Its source commen
 
 This is a distinct long-session lifecycle problem. Do not hide it by simply choosing a huge sequence length until memory/state behavior is characterized.
 
-## Next decisions
+## Next decision
+
+Run the physical Stage 1B pair using the exact same source hash and unchanged `adaptive-reset` server configuration.
 
 ```text
-1. Retest quality-lab with the same microphone preprocessing as the official frontend.
-2. Retest translated output after the native-rate playback fix.
-3. Read encode / LM / decode p50+p95 from the new telemetry.
-4. Replay the downloaded WAV through the deterministic PCM client.
-5. Compare transcript.txt and translated.wav against the live result.
-6. Build Stage 1B transport isolation using the same source WAV:
-
-                  exact same PCM
-                       |
-             +---------+---------+
-             |                   |
-             v                   v
-        raw 24 kHz          controlled Opus
-             |                   |
-             +---------+---------+
-                       |
-                       v
-               same Mimi + Hibiki
+A = raw PCM16 kind 0x03
+B = bundled official-worker Opus kind 0x01
 ```
 
-Only after this split should Stage 2 sampling experiments begin.
+Before comparing quality, verify identical source hash/sample count/tail and healthy realtime telemetry. Because text sampling is currently stochastic, repeat materially different results before attributing them to transport.
+
+Only after this deterministic split is interpreted should Stage 2 sampling experiments begin.
