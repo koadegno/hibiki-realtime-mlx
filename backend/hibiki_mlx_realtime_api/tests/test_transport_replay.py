@@ -66,3 +66,23 @@ def test_stage1b_opus_is_preencoded_then_pages_are_paced_to_the_websocket() -> N
     run_body = script[run_start:]
     assert run_body.index("preencodeOfficialOpus(") < run_body.index("openWebSocket(")
     assert "sendPreencodedOpus(" in run_body
+
+
+def test_stage2_replay_records_runtime_sampling_identity_before_websocket() -> None:
+    html = (STATIC_DIR / "transport-replay.html").read_text()
+    script = (STATIC_DIR / "transport-replay.js").read_text()
+
+    assert 'id="samplingProfile"' in html
+    assert 'id="samplingSeed"' in html
+    assert 'fetch("/ready"' in script
+    assert "sampling_profile" in script
+    assert "sampling_seed" in script
+    assert "text_temperature" in script
+    assert "text_top_k" in script
+    assert "audio_temperature" in script
+    assert "audio_top_k" in script
+    assert "stage2-${runtimeMetadata.sampling_profile}-pcm" in script
+
+    run_start = script.index("async function runTransport")
+    run_body = script[run_start:]
+    assert run_body.index("fetchRuntimeMetadata(") < run_body.index("openWebSocket(")
