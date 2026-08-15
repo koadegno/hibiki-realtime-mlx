@@ -36,6 +36,8 @@ def test_stage1b_transport_replay_assets_are_packaged() -> None:
     assert 'command: "getHeaderPages"' in script
     assert 'command: "encode"' in script
     assert 'command: "done"' in script
+    assert "bufferLength: 960" in script
+    assert "wavBitDepth: 16" in script
     assert "PCM_INPUT_KIND = 3" in script
     assert "OPUS_INPUT_KIND = 1" in script
     assert "performance.now()" in script
