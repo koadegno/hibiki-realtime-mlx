@@ -78,7 +78,9 @@ For realtime tests, always record at least:
 
 ```text
 RTF
-LM p50 / p95
+Mimi encode p50 / p95
+Hibiki LM p50 / p95
+Mimi decode p50 / p95
 queue depths
 input overload count
 first-translation latency
@@ -100,70 +102,154 @@ numbers and dates
 short phrases after a long silence
 ```
 
-The challenge set must progressively become a deterministic replay corpus rather than a new live recording on every run.
+The challenge set is now backed by a deterministic replay corpus rather than requiring a new live recording for every configuration.
 
 ---
 
 # Stage 1 - Isolate input transport loss
 
-Status: **STAGE 1A READY FOR M4 USER TEST**
+Status: **STAGE 1B IMPLEMENTED — WAITING FOR PHYSICAL M4 SAME-WAV A/B**
 
 ### Question
 
-Does the browser's current Opus capture path destroy acoustic detail before Mimi sees it?
+Does the current browser Opus transport materially change Hibiki lexical decisions compared with lossless raw PCM before Mimi sees the signal?
 
-The official frontend currently uses Opus with low encoder complexity and no explicit high bitrate. We need a lossless reference before changing the model.
+### Stage 1A result - live raw PCM reference
 
-### Deliverable 1A - Raw PCM quality lab
+The Stage 1A Quality Lab at `/quality-lab.html` added a lossless 24 kHz mono PCM16 input reference using websocket kind `0x03`, while `/` kept the existing official Opus path.
 
-Implemented on `feat/hibiki-quality-roadmap`:
+The physically tested raw-PCM chain was judged clearly better for translation/transcript fidelity than the physically tested official browser chain. However that live comparison is **not clean codec attribution evidence**:
 
-- the production-like official frontend at `/` is unchanged;
-- `/quality-lab.html` captures with a requested 24 kHz `AudioContext`;
-- mono PCM16 is sent directly over the existing websocket using experimental binary kind `0x03`;
-- the server accumulates raw PCM into the same 1920-sample Mimi frames used by the Opus path;
-- translated text and translated Opus audio use the existing output protocol unchanged;
-- the lab displays the actual browser sample rate and refuses to run if it is not exactly 24 kHz;
-- the exact submitted PCM can be downloaded as a 24 kHz mono WAV for deterministic replay;
-- malformed PCM16 input is rejected instead of silently decoded.
+- the official path includes native-device-rate capture plus opus-recorder resampling to 24 kHz;
+- a later code review confirmed the bundled official frontend uses `noiseSuppression=false`;
+- the Quality Lab used `noiseSuppression=true` during the latest relevant live comparison;
+- the Quality Lab has now been corrected to `noiseSuppression=false` for future live checks.
 
-Server protocol extension:
+Therefore:
 
 ```text
-client -> server
-0x01 + bytes        existing Opus input
-0x03 + PCM16LE      experimental raw 24 kHz mono input
-
-server -> client
-0x00                existing handshake
-0x01 + Opus         existing translated audio
-0x02 + UTF-8        existing translated text
+KEEP raw PCM as the quality reference.
+KEEP the live A/B as evidence that the tested complete chains differ.
+DO NOT claim Opus itself caused the difference from Stage 1A.
 ```
 
-### Test
+### Stage 1A performance update
 
-Use the same speaker, machine, room, silence policy, and phrases twice:
+An earlier raw-PCM run showed an apparent inference slowdown (`LM p50 ~= 33-35 ms`, `RTF ~= 0.55-0.72`). That slowdown did not reproduce in the later long raw-PCM run with per-stage timing telemetry.
+
+Representative later values:
 
 ```text
-A: http://127.0.0.1:8998/                  current Opus path
-B: http://127.0.0.1:8998/quality-lab.html  raw PCM path
+RTF                 ~= 0.25 - 0.27
+Mimi encode p50      ~= 20 ms
+Hibiki LM p50        ~= 20 ms
+Rust Mimi decode p50 ~= 18 ms
+queues               ~= 0/0/0
+overloads            = 0
 ```
 
-Recommended first runtime: `hibiki-mlx:serve:rust:adaptive-reset`. Repeat with `hold` only if the transport result is ambiguous.
+Raw PCM transport is therefore not currently treated as intrinsically slower; the earlier slowdown remains recorded as a non-reproduced anomaly.
 
-### Decision gate
+### Deterministic corpus exists
 
-- If raw PCM is clearly more accurate, keep PCM as the reference and Stage 1B will tune Opus bitrate/complexity/resampling against it.
-- If there is no meaningful difference, stop spending time on transport and move directly to Stage 2.
-- If the quality lab cannot obtain a real 24 kHz browser AudioContext, add a stateful high-quality server resampler before drawing a conclusion.
+The first Quality Lab WAV has been captured and successfully replayed through the raw-PCM client.
 
-### Deliverable 1B - Deterministic replay harness
+```text
+format                24 kHz mono PCM16 WAV
+duration              about 193.28 s
+source PCM SHA-256     22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
+```
 
-Status: **WAITING FOR THE FIRST CAPTURED QUALITY-LAB WAV**
+The replay preserves the exact source data identity and produces:
 
-Use WAV captured by the quality lab to replay the exact same 24 kHz PCM through a session without relying on a live microphone. Store experiment metadata next to results.
+```text
+source.wav
+transcript.txt
+translated.wav
+manifest.json
+```
 
-The output of Stage 1 is a small reproducible source corpus and a conclusion about whether Opus is materially responsible for lexical mistakes.
+The first replay correctly distinguished the initial `la jeune fille` / `le jeune fils` challenge pair while still exposing useful lexical/semantic mistakes over the longer corpus.
+
+### Stage 1B - exact same WAV through two transports
+
+`/transport-replay.html` is the attribution harness.
+
+```text
+                     exact same source.wav
+                              |
+                    SHA-256 verified PCM
+                              |
+                +-------------+-------------+
+                |                           |
+                v                           v
+        raw PCM16 transport          bundled official Opus
+          websocket kind 0x03          websocket kind 0x01
+                |                           |
+                +-------------+-------------+
+                              |
+                              v
+                         same server
+                              |
+                              v
+                    same Rust Mimi encoder
+                              |
+                              v
+                    same Hibiki q4 MLX LM
+                              |
+                              v
+                    same Rust Mimi decoder
+```
+
+Raw mode sends exact 1920-sample / 80 ms PCM frames. Opus mode feeds exact 480-sample / 20 ms frames into the repository's bundled `encoderWorker.min.js` using the resolved 24 kHz frontend worker configuration. Because the canonical WAV is already 24 kHz, Stage 1B intentionally avoids device-rate resampling and isolates Opus encoding/page framing.
+
+Each transport opens a fresh websocket/session. Both use the same configurable deterministic tail, default six seconds. Browser pacing is absolute-clock based and fails closed if the tab falls materially behind instead of bursting queued frames.
+
+### Stage 1B acceptance rule
+
+Run PCM and Opus against the same unchanged `adaptive-reset` server configuration. Before comparing quality, require:
+
+```text
+same source_pcm_sha256
+same source_samples
+same tail_seconds
+same server URL
+RTF < 1.0
+no sustained queue growth
+overloads = 0
+```
+
+Then compare transcript differences, challenge semantics, names/numbers/gender, omissions/repetitions, translated audio continuity, and stage p50/p95 telemetry.
+
+Current sampling is stochastic. One differing pair is evidence but not enough for a strong causal claim; materially different results should be repeated on the exact same WAV.
+
+### Decision gates
+
+**A — controlled Opus is consistently worse than raw PCM**
+
+```text
+Opus encoding/page framing materially contributes to lexical loss.
+```
+
+Keep raw PCM as reference and continue Stage 1 by tuning/replacing the Opus transport before changing model sampling.
+
+**B — controlled Opus and raw PCM are effectively equivalent**
+
+```text
+Opus compression itself is unlikely to explain the live-browser quality gap.
+```
+
+Open Stage 1C focused narrowly on native-rate -> 24 kHz resampling and microphone preprocessing.
+
+**C — repeated runs vary more than the transport difference**
+
+```text
+Transport effect is below current stochastic output variance.
+```
+
+Record Stage 1B as inconclusive and do only the minimum decode-policy determinism work needed to make the transport comparison interpretable.
+
+Stage 2 does not begin until this gate is interpreted.
 
 ---
 
