@@ -18,7 +18,8 @@ Apple-Silicon-native realtime speech-to-speech translation POC for Hibiki-Zero 3
 ## HTTP/WebSocket surface
 
 - `GET /` — vendored official Hibiki-Zero browser frontend.
-- `GET /quality-lab.html` — experimental lossless-input quality frontend.
+- `GET /quality-lab.html` — experimental live lossless-input quality frontend.
+- `GET /transport-replay.html` — deterministic same-WAV raw-PCM/official-Opus Stage 1B frontend.
 - `GET /health` — process liveness.
 - `GET /ready` — q4 LM + selected Mimi codec loaded and warmed.
 - `WS /api/chat` — Hibiki binary protocol plus one experimental input kind:
@@ -45,7 +46,7 @@ task hibiki-mlx:info
 
 The M4 Max measurements showed that Rust Mimi + MLX LM is faster than the all-MLX serial path because CPU Mimi can overlap the GPU language-model step.
 
-Start one of the two silence-policy candidates still under evaluation. For the first Stage 1 transport test, use adaptive reset:
+Start one of the two silence-policy candidates still under evaluation. For Stage 1 transport work, use adaptive reset:
 
 ```bash
 set -o pipefail
@@ -72,49 +73,110 @@ Wait until `/ready` reports:
 {"status":"ready","phase":"ready","ready":true,"error":null}
 ```
 
-## Stage 1: Opus versus raw PCM input
+## Stage 1A: live browser input comparison
 
-This experiment isolates browser input transport quality without changing Hibiki, Mimi, model weights, translated-audio output, or the selected silence policy.
-
-### A — existing Opus frontend
-
-Open:
+The existing official frontend is available at:
 
 ```text
 http://127.0.0.1:8998/
 ```
 
-This is the existing official browser frontend and therefore the baseline capture/Opus path.
-
-### B — raw PCM reference frontend
-
-Open:
+The live raw-PCM reference is available at:
 
 ```text
 http://127.0.0.1:8998/quality-lab.html
 ```
 
-The quality lab requests a 24 kHz browser `AudioContext`, captures exactly 1920 samples per Hibiki frame, converts them to PCM16LE, and sends them directly as websocket kind `3`.
+The quality lab requests a 24 kHz browser `AudioContext`, captures exactly 1920 samples per Hibiki frame, converts them to PCM16LE, and sends them directly as websocket kind `3`. It refuses to run if the browser does not actually create a 24 kHz input context.
 
-The page deliberately refuses to run if the browser does not actually create a 24 kHz `AudioContext`. A hidden or unknown resampling path would invalidate the A/B comparison.
+The current bundled official frontend requests `echoCancellation=true`, `noiseSuppression=false`, `autoGainControl=true`, and mono input. The Quality Lab now mirrors those microphone constraints. Earlier live A/B observations were made while these constraints were not identical, so they remain useful observations of the tested chains but are not clean attribution evidence for the Opus codec itself.
 
-The translated output still comes back through the existing Opus path so Stage 1 changes only the model input transport.
+The quality lab can download the exact submitted source as a mono 24 kHz PCM16 WAV. That file is the source specimen for deterministic Stage 1B.
 
-The quality lab can also download the exact submitted source as a mono 24 kHz PCM16 WAV. Keep that WAV: it becomes the deterministic replay input for the next part of the quality roadmap.
+## Stage 1B: exact same WAV through PCM and official Opus
 
-### Challenge phrases
-
-Use the same phrases several times in both frontends without intentionally over-articulating:
+Open:
 
 ```text
-La jeune fille arrive demain.
-Le jeune fils arrive demain.
-La fille a six livres.
-Le fils a dix livres.
-Elle a cinq cents euros.
+http://127.0.0.1:8998/transport-replay.html
 ```
 
-Record whether gender, number, or similar-word errors change between Opus and raw PCM. Also preserve the server log and the WAV downloaded from the quality lab.
+This page does not use the microphone. It accepts only an uncompressed, mono, 24 kHz PCM16 WAV and computes SHA-256 over the exact WAV `data` bytes. It rejects incompatible files rather than resampling or normalizing them.
+
+Run both transports against one unchanged server configuration:
+
+### A — raw PCM16LE
+
+The replay slices the exact source into 1920-sample / 80 ms frames, zero-pads the final partial frame, appends the configured deterministic silence tail, and sends websocket kind `0x03` at realtime cadence.
+
+### B — official bundled Opus worker
+
+The replay starts a fresh `/encoderWorker.min.js` instance and feeds the same source as 480-sample / 20 ms float frames. The worker uses the resolved 24 kHz frontend configuration:
+
+```text
+bufferLength       = 960
+encoderSampleRate  = 24000
+encoderFrameSize   = 20 ms
+maxFramesPerPage   = 2
+numberOfChannels   = 1
+recordingGain      = 1
+resampleQuality    = 3
+encoderComplexity  = 0
+encoderApplication = 2049
+streamPages        = true
+wavBitDepth        = 16
+originalSampleRate = 24000
+wavSampleRate      = 24000
+```
+
+`originalSampleRate` and `wavSampleRate` are deliberately 24 kHz in Stage 1B because the source specimen is already 24 kHz. This isolates Opus encoding/page framing instead of mixing browser device-rate resampling into the experiment.
+
+Every generated Opus/Ogg page is sent as websocket kind `0x01`. Each PCM or Opus run receives a fresh Hibiki websocket/session plus fresh encoder/decoder worker state.
+
+### Stage 1B artifacts
+
+A successful run enables four downloads:
+
+```text
+source.wav
+transcript.txt
+translated.wav
+manifest.json
+```
+
+`source.wav` is the exact selected file. Both manifests must have the same:
+
+```text
+source_pcm_sha256
+source_samples
+tail_seconds
+url
+```
+
+before the translations are compared. The first captured corpus has source-PCM SHA-256:
+
+```text
+22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
+```
+
+Keep the replay tab active. Timing is scheduled against an absolute browser clock; if the tab falls materially behind realtime, the run fails instead of sending a burst that would invalidate the queue/RTF comparison.
+
+Do not restart or reconfigure the server between A and B. Run PCM first, download all four artifacts, then choose Opus with the same WAV and run again.
+
+Because current text sampling is stochastic, a single differing A/B pair is evidence, not a strong causal conclusion. If the transports differ materially, repeat both on the exact same WAV before deciding that Opus is systematically responsible.
+
+Do not commit source recordings or generated experiment artifacts to the public repository.
+
+## Headless raw-PCM replay
+
+The existing Python replay remains useful as the canonical CLI raw reference:
+
+```bash
+HIBIKI_REPLAY_WAV=/absolute/path/to/hibiki-quality-source.wav \
+  task hibiki-mlx:replay
+```
+
+It writes the same style of source/transcript/translated-audio/manifest result and paces raw PCM at realtime cadence.
 
 ## Benchmark A: all MLX/Metal
 
@@ -143,7 +205,7 @@ PYTHONUNBUFFERED=1 task hibiki-mlx:serve:rust 2>&1 \
 Realtime sessions report summaries such as:
 
 ```text
-realtime input_frames=125 lm_frames=124 rtf=0.27 lm_p50_ms=20.5 lm_p95_ms=22.5 queues=0/0/0 overloads=0
+realtime input_frames=125 lm_frames=124 rtf=0.27 encode_p50_ms=20.0 lm_p50_ms=20.5 decode_p50_ms=18.0 queues=0/0/0 overloads=0
 ```
 
 Interpretation:
