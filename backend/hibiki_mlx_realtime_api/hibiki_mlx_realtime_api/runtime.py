@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -10,10 +11,11 @@ from enum import Enum
 from typing import Any
 
 from hibiki_mlx_realtime_api.codecs import create_codec_pair
-from hibiki_mlx_realtime_api.config import RuntimeConfig
+from hibiki_mlx_realtime_api.config import RuntimeConfig, resolve_sampling_profile
 from hibiki_mlx_realtime_api.model import load_language_model, resolve_model_files
 from hibiki_mlx_realtime_api.session import RealtimeSession
 
+_LOGGER = logging.getLogger(__name__)
 _FRAME_RATE = 12.5
 
 
@@ -69,6 +71,19 @@ class RuntimeManager:
             error=self._error,
         )
 
+    @property
+    def experiment_metadata(self) -> dict[str, object]:
+        """Return the resolved immutable sampling identity for this process."""
+        settings = resolve_sampling_profile(self.config.sampling_profile)
+        return {
+            "sampling_profile": self.config.sampling_profile,
+            "sampling_seed": self.config.sampling_seed,
+            "text_temperature": settings.text_temperature,
+            "text_top_k": settings.text_top_k,
+            "audio_temperature": settings.audio_temperature,
+            "audio_top_k": settings.audio_top_k,
+        }
+
     async def initialize(self) -> None:
         """Resolve artifacts and warm all process-wide inference state."""
         if self._phase is RuntimePhase.READY:
@@ -109,6 +124,7 @@ class RuntimeManager:
             self._codecs = None if self.config.codec == "rust" else codecs
             self._error = None
             self._phase = RuntimePhase.READY
+            _LOGGER.info("Hibiki runtime ready sampling=%s", self.experiment_metadata)
         except Exception as exc:  # lifecycle boundary converts load failure into readiness state
             self._error = f"{type(exc).__name__}: {exc}"
             self._phase = RuntimePhase.FAILED
@@ -136,6 +152,7 @@ class RuntimeManager:
             raise RuntimeError("runtime codec state is unavailable")
 
         max_steps = int(self.config.max_session_minutes * 60.0 * _FRAME_RATE) + 8
+        _LOGGER.info("creating Hibiki session sampling=%s", self.experiment_metadata)
         return self._session_factory(
             loaded_model=self._loaded_model,
             codecs=codecs,
@@ -148,7 +165,8 @@ class RuntimeManager:
             silence_min_seconds=self.config.silence_min_seconds,
             silence_max_seconds=self.config.silence_max_seconds,
             silence_pad_frames=self.config.silence_pad_frames,
-            text_temperature=self.config.text_temperature,
+            sampling_profile=self.config.sampling_profile,
+            sampling_seed=self.config.sampling_seed,
         )
 
     async def close(self) -> None:
