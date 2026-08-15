@@ -510,27 +510,151 @@ silence policy
 translated-audio transport
 ```
 
-Only the browser-to-server source transport changes. This gives the next M4 test a single interpretable variable.
-
-### Verification status
-
-Linux CI validates protocol conversion, malformed-input rejection, packaged lab assets, lockfile, Ruff, tests, CLI import, and Taskfile parsing. The physical M4/browser A/B comparison is still required before deciding whether Opus materially hurts lexical fidelity.
-
-### Decision
-
-**READY FOR M4 USER TEST.**
-
-Use `adaptive-reset` first for both A and B so the only experimental variable is source transport.
+Only the browser-to-server source transport changes.
 
 ---
 
-## Next journal entry
+## 2026-08-15 - Stage 1A physical browser comparison
 
-Record the physical M4 A/B result:
+### User result
+
+The raw-PCM browser chain was judged clearly better for translation/transcript fidelity than the tested official browser chain. The saved raw source WAV itself sounded clear.
+
+### Attribution limitation discovered later
+
+A later code review of the actual bundled frontend corrected the microphone-processing record:
 
 ```text
-A = official `/` Opus input
-B = `/quality-lab.html` raw PCM16 input
+bundled official frontend:
+  echoCancellation = true
+  noiseSuppression = false
+  autoGainControl = true
+  channelCount = 1
 ```
 
-Keep the quality-lab source WAV and use it to implement Stage 1B deterministic replay.
+The Quality Lab used `noiseSuppression=true` during the latest relevant live comparison. The lab has now been changed to `false` for future live parity.
+
+### Decision
+
+**KEEP** the user-observed live-chain difference.
+
+**DO NOT** infer that Opus compression alone caused it. The live test mixed transport/resampling/microphone-processing variables.
+
+---
+
+## 2026-08-15 - Later raw PCM performance returned to baseline
+
+### Observation
+
+The earlier raw-PCM run had shown `LM p50 ~= 33-35 ms` and `RTF ~= 0.55-0.72`. A later long raw-PCM run with stage timing telemetry did not reproduce that slowdown.
+
+Representative later values:
+
+```text
+RTF                 ~= 0.25 - 0.27
+Mimi encode p50      ~= 20 ms
+Hibiki LM p50        ~= 20 ms
+Rust Mimi decode p50 ~= 18 ms
+queues               ~= 0/0/0
+overloads            = 0
+execution            = pipelined
+```
+
+Multiple adaptive-reset park/resume cycles completed without queue growth.
+
+### Decision
+
+Treat the previous raw-PCM slowdown as a **non-reproduced anomaly**, not an intrinsic cost of raw PCM transport. Keep the old result in the journal for traceability.
+
+---
+
+## 2026-08-15 - Deterministic source corpus established
+
+### Result
+
+The first saved Quality Lab WAV was successfully replayed through the deterministic raw-PCM client.
+
+```text
+format                24 kHz mono PCM16 WAV
+duration              about 193.28 s
+source PCM SHA-256     22f929d3860d39c3a0f5acb888a96e3748987a899aa74e48d93df5b59f66e8e3
+```
+
+The replay produced the expected self-contained source/transcript/translated-WAV/manifest artifact set. The opening `la jeune fille` / `le jeune fils` pair was translated distinctly while the longer sample retained lexical/semantic errors useful for future comparisons.
+
+### Translated-energy observation
+
+The saved translated WAV did not show evidence for a simple globally low output-amplitude failure. The user reports that the perceived loss of energy disappears when speaking directly into the microphone and is mainly noticeable when external loudspeakers are recaptured by the microphone.
+
+### Interpretation
+
+External-speaker recapture, echo cancellation, AGC, room acoustics, and microphone preprocessing remain plausible confounds. Do not change the model or Mimi output gain from this observation alone.
+
+---
+
+## 2026-08-15 - Stage 1B deterministic transport attribution implemented
+
+### Goal
+
+Compare **one exact source signal** through raw PCM and the official bundled Opus encoder path without changing Hibiki/Mimi/sampling/silence settings.
+
+### Implementation
+
+Added:
+
+```text
+http://127.0.0.1:8998/transport-replay.html
+```
+
+The page accepts only canonical 24 kHz mono PCM16 WAV, hashes the exact PCM data bytes, and supports:
+
+```text
+A = raw PCM16LE websocket kind 0x03, 1920 samples / 80 ms
+B = bundled encoderWorker.min.js -> websocket kind 0x01, 480 samples / 20 ms
+```
+
+Both use the same source and deterministic tail. Each run starts a fresh websocket/session and fresh worker state.
+
+The Opus worker is initialized with the resolved 24 kHz frontend settings, including low complexity, 20 ms frames, two frames per page, mono, application 2049, and the wrapper defaults required by direct worker initialization. `originalSampleRate` and `wavSampleRate` are 24 kHz deliberately so this experiment does not include native-device-rate resampling.
+
+The browser writes four successful-run artifacts:
+
+```text
+source.wav
+transcript.txt
+translated.wav
+manifest.json
+```
+
+A run fails rather than silently catching up if browser scheduling falls materially behind realtime.
+
+### TDD / CI evidence
+
+The implementation used explicit RED/GREEN cycles:
+
+- Quality Lab microphone-parity test failed before `noiseSuppression=false` was applied.
+- Deterministic Node core tests failed with `MODULE_NOT_FOUND` before the core existed.
+- Stage 1B static/browser contract failed before the replay assets existed.
+- Direct Opus-worker defaults were locked by tests after verifying the wrapper-resolved configuration.
+
+Public Linux CI remains model-free and secret-free. It verifies the lockfile, Ruff, pytest, browser JS syntax, deterministic transport Node tests, CLI smoke, and Taskfile parsing.
+
+### Status
+
+**IMPLEMENTED; PHYSICAL M4 SAME-WAV A/B STILL REQUIRED.**
+
+Do not claim that Opus is better/worse/equivalent until both transports have been run on the same canonical hash with healthy telemetry. Current sampling remains stochastic, so materially different results should be repeated.
+
+### Next journal entry
+
+Record the physical Stage 1B result:
+
+```text
+same source_pcm_sha256
+same source_samples
+same tail_seconds
+A = raw PCM
+B = bundled official-worker Opus
+```
+
+Then choose the Stage 1 gate before moving to Stage 2.
